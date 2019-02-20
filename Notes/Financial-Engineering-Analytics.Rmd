@@ -326,4 +326,104 @@ pacf(coredata(Brent.return.abs), main = "Brent Partial Autocorrelogram", lag.max
      col = "blue", ci.col = "red")
 ```
 
-There is *Volatility Clustering galore*. Strong persistent lags of absolute movement in returns evidenced by the `ACF` plot. 
+There is *Volatility Clustering galore*. Strong persistent lags of absolute movement in returns evidenced by the `ACF` plot.  There is evidence of dampenining with after shocks past trading 10 days ago. Monthly volatility affects today's performance.
+
+Some of this volatility arises from the way Brent is traded. It is lifted through well-heads in the North Sea. It then is scheduled for loading onto ships and loads are then bid, along with routes to destination. It takes about five days to load crude and another five to unload. At each partial loading and unloading, the cruid is re-priced. Then there is the voyage loag itself, where paper claims to wet crude create further pricing and volatility.
+
+Next we explore the relationship among financial variables.
+
+
+## Gettings Caught in the Cross-Current
+
+Now our job is to ask the really important questions around connectivity. Suppose we are banking our investment in certain sectors of an economy, with its GDP, financial capability, employment, exports and imports, and so on.
+
+
+* How will we decide to contract for goods and services, segment vendors, segment customers, based on these interactions?
+
+
+* How do we construct our portfolio of business opportunities?
+
+* How do we indentify insurgent and relational risks and build a playbook to manage these?
+
+* How will changes in one sector's factors (say, finance, political will) affect factors in another?
+
+
+We will not stretch our univariate analysis a bit and look at *cross-correlations* to help us get the groun truth around these relationships, and *begin* to answer some of these business questions in a more specific contenxt.
+
+
+Let's load the `zoo` and `qrmdata` libraries first and looka t the `EuroStoxx50` data set. Here we can imagine we are rebuilding our brand and footprint in the European Union and United Kingdom. Out customers might be the companies based in these countries as out target market.
+
+
+* The data: 4 stock exchange indices across Europe (and the United Kingdom)
+
+* This will allow us to profile the forward capabilities of these companies across their economies.
+
+* Again we will look at returns data using the `diff(log(data))[-1]`
+
+```{r}
+library(zoo)
+library(qrmdata)
+library(xts)
+data("EuStockMarkets")
+EuStockMarkets.price <- as.zoo(EuStockMarkets)
+EuStockMarkets.return <- diff(log(EuStockMarkets.price))[-1]* 100
+```
+
+
+
+```{r}
+plot(EuStockMarkets.price, xlab = "", main = "")
+```
+
+
+```{r}
+plot(EuStockMarkets.return, xlab = " ", main = " ")
+```
+
+
+Let's then look at cross-correlation among one pair of these indices to see how they are related across time (lags) for returns and the absolute value of returns. The function `ccf` will aid us tremendously.
+
+```{r}
+ccf(EuStockMarkets.return[,1], EuStockMarkets.return[,2],main ="Returns DAX vs. CAC",lag.max =20,ylab ="",xlab ="",col ="blue",ci.col ="red")
+```
+
+```{r}
+ccf(abs(EuStockMarkets.return[,1]),abs(EuStockMarkets.return[,2]),main ="Absolute Returns DAX vs. CAC",lag.max =20,ylab ="",xlab ="",col ="blue",ci.col ="red")
+```
+
+
+We see some small raw correlations across time with raw retuns. More revealing, we see volatility of correlation clustering using return sizes. We can conduct one more experiment: a rolling correlation using this function:
+
+
+```{r}
+corr.rolling <-function(x) {
+  dim <-ncol(x) 
+  corr.r <-cor(x)[lower.tri(diag(dim),
+                            diag =FALSE)]
+  return(corr.r)
+}
+```
+
+We then embed our rolling correlation function, `corr.rolling` into the function `rollapply`. The question we need to answer is: What is the history of correlations, and from the history, the pattern of correlation in the UK and EU stock markets? If there is a "history" with a "pattern", then we have to manage the risk that conducting business in one country will definately affect business in another. The implication is that bad things will be followed by more abd things more often than good things. The implication compounts a similar implication across markets.
+
+
+```{r}
+corr.returns <- rollapply(EuStockMarkets.return,
+                          width = 250, 
+                          corr.rolling,
+                          align = "right",
+                          by.column = FALSE)
+colnames(corr.returns) <- c("DAX & CAC","DAX & SMI","DAX & FTSE"
+                            ,"CAC & SMI","CAC & FTSE","SMI & FTSE")
+
+plot(corr.returns, xlab = "", main = "")
+```
+
+
+
+
+
+
+
+
+
