@@ -5,7 +5,7 @@ date: "19/02/2019"
 output:
   pdf_document:
     toc: yes
-    toc_depth: '2'
+    toc_depth: '3'
     fig_caption: yes
     number_sections: yes
     fig_height: 6
@@ -418,6 +418,2882 @@ colnames(corr.returns) <- c("DAX & CAC","DAX & SMI","DAX & FTSE"
 
 plot(corr.returns, xlab = "", main = "")
 ```
+
+Again we observe the volatility clustering from bunching up of the absolute sizes of returns. Economic performance is certainly subject here to the same dynamics we saw for a single financial variable such as Brent.
+
+Let's redo some of the work we just did using another set of techniques. This time we are using the "Fisher" transformation. Look up Fisher in Wikipedia and in your reference texts.
+
+
+* How can the Fisher Transformation possibly help us answer our business questions?
+
+* For three Spanish companies, Iberdrola, Endesa, and Repsol, replicate the Brent and EU stock market experiments above with absolute sizes and tails. Here we already have "series" covered.
+
+First, the Fisher transformation is a smoothing routine that helps us tabilze the volatility of a variate. It does this by pulling some of the shockiness (i.e., outliers and aberrant noise) out of the original time series. In a phrase, it helps us see the forst (or the wood) for the trees.
+
+We now replicate the Brent and EU stock exchange experiments. We again load some packages and get some data using `quantmod`s `getSymbols` off the Madrid stock exchange to match our initial working example of Iberian companies on account. Then compute returns and merge into a master file.
+
+
+
+```{r}
+library(xts)
+library(qrmdata)
+library(quantreg)
+library(quantmod)
+library(matrixStats)
+
+tickers <- c("ELE.MC","IBE.MC", "REP.MC")
+getSymbols(tickers)
+```
+
+
+```{r}
+REP.r <- na.omit(diff(log(REP.MC[, 4]))[-1])
+IBE.r <- na.omit(diff(log(IBE.MC[, 4]))[-1])
+ELE.r <- na.omit(diff(log(ELE.MC[, 4]))[-1])
+
+ALL.r <- na.omit(merge(REP = REP.r, IBE = IBE.r,
+                       ELE = ELE.r, all = FALSE))
+```
+
+1. The persistance of returns
+2. The importance of return size
+3. Clustering of volatility
+
+```{r}
+plot(ALL.r)
+```
+
+```{r}
+par(mfrow = c(2, 1))
+acf(ALL.r)
+```
+
+
+
+```{r}
+par(mfrow = c(2, 1))
+acf(abs(ALL.r))
+```
+
+
+```{r}
+par(mfrow = c(2, 1))
+pacf(ALL.r)
+```
+
+```{r}
+par(mfrow = c(2, 1))
+pacf(abs(ALL.r))
+```
+
+Let's examine the correlation structure of markets where we can observe
+
+1. The relationship between correlation and colatility
+
+2. How quantile regression gets us to an understanding of high stress (high and low quantile) episodes
+
+
+```{r}
+R.corr <- apply.monthly(ALL.r, FUN = cor)
+R.vols <- apply.monthly(ALL.r, FUN = colSds) ## from MatrixStats
+head(R.corr, 3)
+```
+
+
+```{r}
+head(R.vols, 3)
+```
+
+
+```{r}
+R.corr.1 <- matrix(R.corr[1, ], 
+                   nrow = 3,
+                   ncol = 3,
+                   byrow = FALSE)
+rownames(R.corr.1) <- tickers
+colnames(R.corr.1) <- tickers
+head(R.corr.1)
+```
+
+
+```{r}
+R.corr <- R.corr[, c(2, 3, 6)]
+colnames(R.corr) <- c("ELE.IBE", "ELE.REP",
+                      "IBE.REP")
+colnames(R.vols) <- c("ELE.vols", "IBE.vols",
+                      "REP.vols")
+head(R.corr, 3)
+```
+```{r}
+head(R.vols, 3)
+```
+
+```{r}
+R.corr.vols <- merge(R.corr, R.vols)
+plot.zoo(merge(R.corr.vols))
+```
+
+
+```{r}
+ELE.vols <- as.numeric(R.corr.vols[,"ELE.vols"])
+
+IBE.vols <- as.numeric(R.vols[,"IBE.vols"])
+REP.vols <- as.numeric(R.vols[,"REP.vols"])
+length(ELE.vols)
+
+```
+
+```{r}
+fisher <- function(r) {
+  0.5*log((1+r)/(1-r))
+  }
+
+rho.fisher <- matrix(fisher(as.numeric(R.corr.vols[,
+                                                   1:3])),
+                     nrow =length(ELE.vols),
+                     ncol =3,
+                     byrow =FALSE)
+```
+### On to quantiles
+
+
+Here is the quantile regression part of the package. Quantile regression finds the average relationship between dependent and independent variables just like ordinary least squares with one exception. Instead of centering the regression on the arithmetic mean of the dependent variable, quantile regression centers the regression on the specified quantile of the dependent  So instead of using the arithemetic average of the rolling correlations, we now use the 10th quantile, or the median, which is the 50th quantile as our reference. This makes great intuitive sense since we have already established that the series we deal with here are thick tailed, skewed, and certainly not normally distributed.
+
+Here is how we use the `quantreg` package.
+
+1. We set `taus` as the quantile of interest.
+
+2. We run the quantile regression using the `quantreg` package and a call to the `rq` function.
+
+3. We can overlay the quantile regression results ontp the standard linear model regression. 
+
+4. We can sensitize our analysis with the range of upper and lower bounds on the parameter estimates of the relationship between correlation and volatility. THis sensitivity analysis is really a confidence interval based on quantile regression.
+
+
+```{r}
+library(quantreg)
+taus <- seq(0.05, 0.95, 0.05)
+
+
+fit.rq.ELE.IBE <- rq(rho.fisher[, 1] ~ ELE.vols, tau = taus)
+
+fit.lm.ELE.IBE <- lm(rho.fisher[, 1] ~ ELE.vols)
+
+plot(summary(fit.rq.ELE.IBE), parm = "ELE.vols")
+```
+
+
+
+
+Here we build the estimations and plot the upper and lower bounds.
+
+```{r}
+taus1 <- c(0.05, 0.95) ## fit the confidence interval (CI)
+
+plot(ELE.vols, rho.fisher[, 1], xlab = "ELE.vol", ylab = "ELE.IBE")
+
+abline(fit.lm.ELE.IBE, col = "red")
+
+for (i in 1:length(taus1)){
+  # these will be the CI
+  abline(rq(rho.fisher[, 1] ~ ELE.vols,
+            tau = taus1[i]), col = "blue")
+}
+
+grid()
+```
+
+Quantile regression helps us to see the upper and lower bounds. Relationships between high-stress periods and correlation are abundant. These markets simply reflect normal buying behaviors across many types of exchanges: buying food at Safeway or Whole Foods, buying collateral to insure a project, selling of iliquid assets.
+
+
+## Time is on our Side
+
+Off to another important variable, the level and growth rate of Gross National Product. Let's start with some US Cross National Product (GNP) data from the St.Louis Fed's open data website ("FRED"). 
+
+
+```{r}
+name <- "GNP"
+download <- read.csv("data/GNPC96.csv")
+```
+
+look at the data:
+```{r}
+hist(download[, 2])
+```
+
+```{r}
+summary(download[, 2])
+```
+
+We then create a raw time series object using `ts` funcion where rownames are dates, select some data, and calculate growth rates. This will allow us to use plotting functions to index the dates in the data. Again, we make use of the `diff(log(data))` vector calculations.
+
+
+```{r}
+GNP <- ts(download[1:85, 2], start = c(1995,1), freq = 4)
+GNP.rate <- 100* diff(log(GNP))
+str(GNP)
+```
+
+```{r}
+head(GNP)
+```
+
+```{r}
+head(GNP.rate)
+```
+
+
+
+```{r}
+plot(GNP, main = "US GNP Level")
+```
+
+
+```{r}
+plot(GNP.rate, type = "h", main = "GNP quarterly growth rates")
+abline(h = 0, col = "darkgray")
+```
+
+
+We see a phenomenon called "nonstationarity". The probability distribution (think hist()) would seem to change over time (many versions of a hist()). This means that the standard deviation and mean change as well (and higher moments such as skewness and kurtosis). There is trend in the level and simply dampened sinusoidal in the rate. In a nutshell we observe several distributions mixed together in this series. This will occur again in the term structure of interest rates where we will use splines and their knots to get at parameterizing the various distributions lurking just beneath the ebb and flow of the data.
+
+
+### Forecasting GNP
+
+
+As always let's look at ACF and PACF:
+
+```{r}
+par(mfor = c(2, 1))
+acf(GNP.rate)
+acf(abs(GNP.rate))
+```
+
+```{r}
+par(mfrow = c(1, 1)) # default setting
+```
+
+What do we think is going on? There are several significant autocorrelations within the last 4 quarters. Partial autocorrelation also indicates some possible relationship 8 quarters back.
+
+Let's use `R`'s time series estiamtion and prediction tool `arima`. In this world we think there is a regression that looks like this:
+
+$$x_t = \alpha_0 + \alpha_1x_{t-1}.....a_px_{t-p} + b_1 \epsilon_{t-1} + ... + b_q \epsilon_{t-q}$$
+
+where $x_t$ is a first, $d = 1$, differenced level of a variable, here GNP. There are $p$ lags of the rate itself and $q$ lags of residuals. We oficially call this an `Autoregressive Intergrated Moving Average` process of order (p,d, q), or `ARIMA(p, d, q)` for short. 
+
+Estimation is quick and easy.
+
+```{r}
+fit.rate <- arima(GNP.rate, order = c(2, 1, 1))
+```
+
+The order is 2 lags of rate, 1 further difference (already differenced once when we calculated `diff(log(GNP))`), and 1 lag of residuals. Let's diagnose the results with `tsdiag()`. WHat are the results?
+
+```{r}
+fit.rate
+```
+
+Let's take out the moving average term and compare:
+
+```{r}
+fit.rate.2 <- arima(GNP.rate, order = c(2, 0, 0))
+fit.rate.2
+GNP.resid <- residuals(fit.rate.2)
+```
+
+
+The qqnorm function plots actual quantiles agains theoretical normal distributions of the quantiles. A line through the scatterplot will reveal deviations of actual quantiles from the normal ones. Those deviations are the key to understanding tail behavior, and thus the potential influence of outliers, on our understanding of the data.
+
+
+```{r}
+
+GNP.resid <- fit.rate.2$residuals
+hist(GNP.resid, col = "steelblue")
+```
+
+```{r}
+qqnorm(GNP.resid)
+qqline(GNP.resid)
+```
+
+
+Some ways to interpret the qq-chart include
+
+1. The diagonal line is the normal distribution quantile line.
+
+2. Deviations of actual quantiles from the normal quantile line mean nonnormal.
+
+3. Especially deviations at either (or both) end of the line spell think tails and lots more "shape" than the normal distribution allows.
+
+
+### Residual again
+
+How can we begin to diagnose the GNP residuals? Let's use the ACF and the `moments` package to calculate `skewness` and `kurtosis`. We find that the series is very thick tailed and serially correlated as evidenced by the usual statistical suspects. But no volatility clustering.
+
+```{r}
+acf(GNP.resid)
+```
+
+Now let's look at the absolute values of growth (i.e., GNP growth sizes). This will help us understand the time series aspects of the volatility of the GNP residuals
+
+```{r}
+acf(abs(GNP.resid))
+```
+
+....and compute tail statistics.
+
+```{r}
+library(moments)
+skewness(GNP.resid)
+```
+
+
+```{r}
+kurtosis(GNP.resid)
+```
+
+The residuals are positively skewed and not so thick tailed, as the normal distribution has by definition a kurtosis equal to 3.00. Now for the forcast.
+
+
+```{r}
+(GNP.pred <- predict(fit.rate, n.ahead = 8))
+```
+
+Now for something really interesting, yet another rendering of the notorious Efficient Market Hypothesis.
+
+
+## Give it the Boot
+
+Out goal is to infer the significance of a statistical relationship among variates. However, we do not have access to, or a "formula" does not exist, that allows us to compute the sample standard deviation of the mean estimator.
+
+* The context is just how dependent is today's stock return on yesterday's?
+
+* We want to use the distribution of real-world return data, without needing assumptions about normality.
+
+* The null hypothesis $H_0$ is lack of dependence (o.e., an efficient market). The alternative hypothesis $H_1$ is that today's returns depends on past returns, on average.
+
+
+Out strategy is to change the data repeatedly, and re-estimate a relationship. The data is sampled using the `replicate` function, and the sample ACF is computed. This gives us the distribution of the coefficient of the ACF under the null hypotheses, $H_0$: idependence, while using the empirical distribution of the retuns data.
+
+
+Let's use the Repsol returns and pull the 1st auto correlation from the sample with this simple code,
+
+```{r}
+acf(REP.r, 1)
+```
+
+There is not much for us to see, barely a blip, but there is a correlation over the 95% line.
+Let's further test this idea.
+
+* We obtain 2500 draws from the distribution of the first autocorrelation using the `replicate` function.
+
+* We operate under the null hypothesis of independence, assuming rational markets (i.e, rational markets is a "maintained hypothesis")
+
+```{r}
+set.seed(1016)
+
+# Sample has 3100 rows, we want to sample 2500 without replacement
+nrow(REP.r)
+
+# Replicate
+acf.coeff.sim <- replicate(2500, acf(sample(REP.r,
+                          size = 2500, replace = FALSE), lag = 2,
+                          plot = FALSE)$acf[2])
+# Summary
+summary(acf.coeff.sim)
+```
+
+
+
+```{r}
+hist(acf.coeff.sim, probability = TRUE,
+     breaks = "FD", xlim = c(0.04, 0.05),
+     col = "steelblue", border = "white"
+     )
+```
+
+
+## Summary
+
+We explored time series data using ACF, PACF, and CCF. We characterized several stylized facts of financial returns and inferred behaviour using the rolling correlation regression on volatility. We then supplemented the ordinary least square regression confidence intervals using the entire distribution of the data with quantile regression. We also built using bootstrapping techniques we simulated coefficient inference to check the efficient market hypothesis. This along with the quantile regression technique, allows us to examine risk tolerance from an inference point of view.
+
+
+# Term Structure and Splines
+
+Our organization is about to expand its operations into the European Union (EU). To do that we will have to raise several hundred million dollars of collateral to back employees, customers and out supply chain in the EU. Negative interest rates abound in t the markets as political events and central bankers vie for control of the euro and its relationship to major currencies. Out task is to help the Chief Financial Officer understand how the term structure of interest rates might change and thus impact the amount and pricing of the collateral our organization is about to raise.
+
+We might ask ourselves:
+
+  1.  What is the term structure of interest rates?
+  2.  Why would the term structure matter to the CFO?
+  
+"Term" refers to the maturity of a debt instrument, the "loan" we get to buy a house. "Term structure" is the schedule of interest rates posted for each maturity. The "term structure" is also known as the "yield curve". If the maturity on your loan (or your company's bond) rises, a higher yield might just convince investors (like you) to wait longer for a return of the principal they lend to you. Higher yields mean also that you would have to price the bond at a higher coupon rate. This means more income is paid out to lenders and bondholders than to management, staff, and shareholders. The consequence is cash flow volatility.
+
+
+Our objective is to conceive a model of bond prices that reflect the underlying dynamic of the term structure of interest rates. Such a model requires us to formulate forward rates of return on bonds of various maturities, and average these rates across the time to maturity in a yield calculation. We will then need to understand how to interpolate and extrapolate rates across maturities. With that tool in hand, we can price bonds, collaterals, and build discount rates to evaluate future expected cash flows.
+
+
+To do all of this we will employ "regression splines" to interpolate and extrapolate values of forward rates from the term structure. The regression spline will reflect a financial model of the term structure applied to the estimation of actual term structures. We will
+
+
+## The Bond
+
+Our analysis begins with understanding cash flow and valuation of a simple bond. A typical bond is a financial instrument that pays fixed cash flows for the maturity of the bond with a repayment of the principal (notational or face value) of the bond at maturity. In symbols,
+
+$$
+V = \sum _ { t = 0 } ^ { m T } \frac { c P } { ( 1 + y / m ) ^ { t } } + \frac { P } { ( 1 + y / m ) ^ { m T } }
+$$
+Where $V$ is the present value of the bond, $T$ is the  number of years to maturity, $m$ is the number of periods cash flows occur per year, $y$ is the bond yield per year, $c$ is the coupon rate per year, and $P$ is the bond's principal (notional or face value).
+
+Using the idea of an annuity that pays $(c/m)P$ per period for $mT$ periods and $P$ at maturity period $mT$ we get a nice formula for the present value sum of coupon payments:
+
+$$
+V = ( c / m ) P \left( \frac { 1 } { y / m } - \frac { 1 } { ( y / m ) ( 1 + y / m ) ^ { m T } } \right) + \frac { P } { ( 1 + y / m ) ^ { m T } }
+$$
+
+From a financial engineering point of view this formulation is the same as constructing a position that is
+
+* long a perpetuity that pays a unit of currency starting the next compounding period and
+
+* short another perpetuity that starts to pay a unit of currecncy at the maturity of the bond plus one compounding period.
+
+
+Our typical bond pays coupons twice a year, so $m = 2$. If the bond's maturity in years is 10 years, then $mT = 10 \times 2 = 20$ compounding periods. We will assume that there is no accural of interest as of the bond's valuation date for the moment.
+
+
+```{r}
+c <- 0.05
+P <- 100
+y <- c(0.04, 0.05, 0.06)
+m <- 2
+T <- 10
+
+(V <-(c/m)*P*(1/(y/m)-1/((y/m)*(1+(y/m))^(m*T)))+P/(1+(y/m))^(m*T))
+```
+
+
+### A quick example
+
+1. If the coupon rate is greater than the yield, why is the price greater than par value?
+
+2. Negative interest rates abound, so set `y <- c(-0.02, -0.01, 0.00, 0.01, 0.02)` and reclaculate the potential bond values.
+
+One answers might be:
+
+The bond pays out at a rate greater than what is required in the market. Buyers pay more than par to make up the difference. 
+
+
+Here are more results. We assign variables to assumptions in the question and the calculate the 
+
+```{r}
+c <- 0.05
+P <- 100
+y <- c(-0.02, -0.01, 0, 0.01, 0.02)
+m <- 2
+T <- 10
+(V <-(c/m)*P*(1/(y/m)-1/((y/m)*(1+(y/m))^(m*T)))+P/(1+(y/m))^(m*T))
+```
+
+Why a `NaN`? Because we are dividing by `0`! By the way, these are some heft premia.
+
+The yield in this model is an average of the forward rates the market used to price future cash flow `during future periods of time`. How can we incorporate a changing forward rate into a model of bond prices? Our strategy is to use the past as a guide for the future and calibrate rates to a curve of rates versus maturities. By using a regression spline model of the term structure we can develop rates at any maturity. Then we can use the interpolated (even extrapolated) rates as building blocks in the valuation of bonds.
+
+
+### What's a spline?
+
+A *spline* is a function that is constructed piece-wise from polynomial functions. But image the polynomials are pieces of the term structure of interest rates. Each term structure segment is marked off by a set of price and maturity pairs. Whole sections can be marked off by a *knot* at a location in the term structure paired data. Knots are most commonly placed at quantiles to put more knots where data is clustered close together. A different polynomial function is estimated for each range and domain of data between each knot; this is the spline. Now we will use some finance to build a polynomial regression spline out of US Treasury zero-coupon data.
+
+In general a polynomial is an expression that looks like this:
+
+$$f(x) = \alpha_0x^0 + \alpha_1x^1 + \alpha_2x^2 + ... + \alpha_px^p,$$
+where the $\alpha's$ are constant coefficients, and $x^0 = 1$ and $x^1 = x$.
+
+* If $p = 0$, then we have a *constant* function.
+
+* if $p = 1$, we have a *linear* function.
+
+* $p = 2$, we have a *quadratic* function.
+
+* $p = 3$, we have a *cubic* function, and so on...
+
+In our term structure work, We will be using a *cubic* function to build a regression spline.
+
+
+### Back to the Bond
+
+Suppose investors give an issuer today the present value, the bond "price" $P_t$ of receiving back the 100% of the face value of a zero-coupon bond at maturity year (or fraction thereof), $T$.
+
+The price of a zero coupon bond, quoted in terms of the percentage of face value, is this expression for discrete computing at rate $y^d_t$ (say, monthly you get a percentage of last month's balance):
+
+$$P_T = \frac{100}{(1 + y^d(T))^T}$$
+
+Suppose, with the help of Jacob Bernoulli and Leonhardt Euler, we run this experiment:
+
+
+1. Pay today at the beginning of the year $P$ to recieve \$1 at the end of one year AND interest $y$ is compounded only once in that year. Thus at the end of the year we recieve $P + yP$. But by contract this amount is \$1, so that:
+
+$$P + yP = P(1 + y) = 1$$
+and solving for P
+
+$$P = \frac{1}{ (1 + y)^1}$$
+where we raised $(1 + y)$ to the first power to emphasize that one compound interest period was modeled.
+
+2. Now suppose that we can recieve interest twice a year at an annual interest rate of y, then at the end of the first half of the year we recieve half of the interest $y/2$ so that we have in our contract account
+
+$$P(1 + \frac{y}{2})$$
+
+We then can let this stay in the account this amount will also earn $y/2$ interest to the end of the contract year so that
+
+
+$$
+P \left( 1 + \frac { y } { 2 } \right) + \frac { y } { 2 } \left[ P \left( 1 + \frac { y } { 2 } \right) \right] = P \left( 1 + \frac { y } { 2 } \right) \left( 1 + \frac { y } { 2 } \right) = P \left( 1 + \frac { y } { 2 } \right) ^ { 2 }
+$$
+
+Setting
+
+$$P(1 + \frac{y}{2})^2 = 1 \text{ dollar}$$
+
+we can solve for $P$, the present value of receiving \$1 at the end of the contract year when we have two compounded periods or 
+
+$$P = \frac{1}{( 1 + \frac{y}{2})^2}$$
+
+3. We can, again with Jacob Bernoulli's help, more generally state for $m$ compounding periods.
+
+$$P = \frac{1}{(1 + \frac{y}{m})^m}$$
+
+4. Now let's suppose $y = 100$ percent interest $m = 365 \times 24 \times 60 = 525600$ compounding periods (minute by minute compounding), then 
+
+$$P = \frac{1}{( 1 + \frac{1}{525600})^5 25600}$$
+
+```{r}
+(m <- 365 * 24 * 60)
+```
+
+```{r}
+(y <- 1)
+```
+
+
+```{r}
+(P <- 1/(1 + (y/m))^m)
+```
+
+This translates into continuous compounding (you get a percentage of the last nanosecond's balance at the end of this nanasecond...as the nanoseconds get ever smaller) as...
+
+$$
+P _ { T } ( \theta ) = 100 \exp \left( - y _ { T } T \right)
+$$
+This expression is the present value of receiving a cash flow of 100% of face value at maturity. If the bond has coupons, we can consider each of the coupon payments as a mini-zero bond. Taking the sum of the present value of each of the mini-zeros give us the value of the bond, now seen as a portfolio of mini-zeros.
+
+The yield $y_t$ the rate from date 0 to date $T$, maturity. it covers the stream of rates for each intermediate maturity from 0 to $T$. Suppose, we define foward rate $r(t, \theta)$, where each $t$ is one of the intermediate maturity dates between time 0 and maturity $T$, and $\theta$ contains all of the informatio we need about the shapr of $r$ across maturities. We can estimate the forward curve from bond prices $P(T)$ of the $T$th maturity with
+
+
+
+$$
+- \frac { \Delta \log \left( P \left( T _ { i } \right) \right) } { \Delta T _ { i } } = - \frac { \log \left( P \left( T _ { i } \right) \right) - \log \left( P \left( T _ { i - 1 } \right) \right) } { T _ { i } - T _ { i - 1 } }
+$$
+
+The $\Delta$ stands for the difference in one price or maturity $i$ and the previous price and maturity $i - 1$. The $log()$ function is the natural logarithm. An example will follow.
+
+The *yield* is then the *average of the forward rates* from date 0 to date $T$ of a zero bond. We can use the integral, which amounts to a cumulative sum, to compute this average:
+
+$$
+y _ { T } ( \theta ) = T ^ { - 1 } \int _ { 0 } ^ { T } r ( t , \theta ) d t
+$$
+
+The numerator is the cumulative sum of the forward rates for each maturity up to the last maturity $T$. In this expression, $rdt$ is the forward rate across a small movement in maturity. The denominator is the number of maturity years $T$.
+
+
+### An example to clarify
+
+Load these lines of `R` into the RStudio console:
+
+```{r}
+maturity <- c(1, 5, 10, 20, 30) # in years
+price <- c(99, 98, 96, 93, 89) # in percentage of face value
+```
+
+
+A. now let's experiment on these zero-coupon prices with their respective maturities:
+
+    1. Calculate the `log(price)/100`. Then find the foward rates using the following
+    ```{r}
+    (forward <- -diff(log(price))/ diff(maturity))
+    ```
+    
+    2. Compare `log(price)` with `price`.
+    
+    3. What does the foward rate formula indicate? What would we use it for?
+    
+B. Find the yield-to-maturity curve and recover the bond prices using
+
+
+```{r}
+(forward.initial <- -log(price[1]/100))
+(forward.integrate <- c(forward.initial,
+                        forward.initial + cumsum(forward * diff(maturity))))
+
+# a rolling integration of rates
+# across maturities
+(price <- 100 * exp(-forward.integrate))
+# present value of recieving 100% of 
+# face value
+```
+
+1. What is the interpretation of the `forward.integrate` vector?
+
+2. What happened to the first bond price?
+
+3. Did we recover the original prices?
+
+Some results follow.
+
+For question A we ran the forward rates. Let's run the natural logarithm of price:
+
+```{r}
+(forward <- -diff(log(price/100)/diff(maturity)))
+```
+
+```{r}
+(-log(price/100))
+```
+`-log(price/100)` seems to give us the yield-to-maturity directly. But do look at `-diff(log(price))` next:
+
+```{r}
+(-diff(log(price/100)))
+```
+
+These look like rates, because they are. They are the continuous time version of a percentage change, or growth, rate from one maturity to another maturity. We can use these numerical results to motivate an interpretation: interest rates are simply rates of change of present values relative to how much time they cover in maturity.
+
+Now let's calculate
+
+```{r}
+(-diff(price/100)/(price[-length(price)/100]))
+```
+
+These are dicrete percentage changes that are similar, but not quite the same, as the continuous (using `log()`) version.. Note the use of the indexing of price to eliminate the last price, since what we want to compute is:
+
+
+$$\frac{P(T_i) - P(T_{i = 1]})}{P(T_{i-1})}$$
+
+
+### Rolling the integration
+
+Running the code for question B we get:
+
+
+```{r}
+(forward.initial <- -log(price[1]/100))
+(forward.integrate <- c(forward.initial,
+                        forward.initial + cumsum(forward * diff(maturity))))
+
+```
+
+
+```{r}
+# a rolling integration of rates
+# across maturities
+(price <- 100 * exp(-forward.integrate))
+```
+
+
+```{r}
+# present value of recieving 100% of 
+# face value
+```
+
+
+The rolling "intergration" is an accumulative process of adding more forward rates as the maturity advances, thus a cumulative sum or in `R` a `cumsum` is deployed.
+
+    1. Yields are the accumulation of foward rates. THus the use of the cumulative sum as a discrete version of the integral. Rates add up (instead of multiply: nice feature) when we use `log` and `exp` to do our pricing.
+    
+    2. The first forward rate is just the discount rate on the 1-year maturity bond stored in `forward.initial`.
+    
+    3. All bond prices are recovered by inverting the process and producing forwards from prices and converting to yields and back to prices.
+    
+    
+
+## Foward Rate Parameters
+
+Now we attend to the therefore mysterious $\theta$, embedded in the foward rate sequence `r`. We suppose the foward rate is composed of a long-term constant, $\theta_0$; a slope term with parameter $\theta_1$; a more shapely, even "humped" term with paramter $\theta_2$; and so on for $p$ polynomial terms:
+
+$$r(t, \theta) = \theta_0+ \theta_1t + \theta_2t + \dots+ \theta_pt^p$$
+
+$$\text{Stopped at Page 134}$$
+
+
+
+
+# Market Risk
+
+Suppose a division in our company buys electricity to make steel. We know of two veryvolatile factors in this process:
+
+    * 1.The price of steel at the revenue end, and the other is
+    
+    * 2.The price of electricity at the cost end.
+    
+To model the joint volatility of the power-steel spread We can use electricity and steel pricesstraight from the commodity markets. We can also use stock market indexes or companystock prices from electricity producers and transmitters and from a steel products company toproxy for commodities. Using company proxies gives us a broader view of these commoditiesthan just the traded pure play in them.
+
+In this chapter we will
+
+    1.Measure risks using historical and parametric approaches
+    
+    2.Interpret results relative to business decisions
+    
+    3.Visualize market risk
+
+
+
+## What is Market Risk
+
+Market risk for financial markets is the impact of unanticipated price changes on the value ofan organization’s position in instruments, commodities, and other contracts. In commoditymarkets there is sometimes considered a more physical type of market risk called volumetricrisk that relates to the delivery of the commodity to a buyer. This risk might be triggeredby a complex contract such as a CDO or a spark spread tolling agreement in power andenergy markets. Here we will assume that volumetric changes are physical in the sense thata electricity system operator governs a physical process such as idling an electric generationplant.
+
+
+A “position” is the physical holding of an asset or commodity, such as a share of Apple stock,or an ounce of gold. A long position means that the market participant possesses a positiveamount of the asset or commodity. A short position means that the market participant doesnot possess an asset or commodity.  The “position” is considered exogenous to the pricestochastic process. This implies that changes in position do not affect the liquidity of themarket relative to that position.
+
+
+### Try this exercise
+
+Suppose you are in charge of the project to manage the contracting for electricity and steelat your speciality steel company. Your company and industry have traditionally used tollingagreements to manage the steel-power spread, both from a power input and a steel outputpoint of view.
+
+    1.Look up a tolling agreement and summarize its main components.
+    
+    2.What are the input and output decisions in this kind of agreement.
+
+Here are some results
+
+1.In the electric power to steel tolling agreement a steel buyer supplies power to a steelplant and receives from the plant supplier an amount of steel based on an assumedpower-to-steel transformation rate at an agreed cost.
+    
+    * Prices of power and steel
+    
+    * Transformation rate
+    
+    * Agree cost
+
+2.Decisions include
+
+    * Buying an amount of power (MWh) 
+    
+    * Selling an amount of steel (tons)
+    
+    * Scheduling plant operations
+
+Decisions will thus depend on the prices of electricity and steel, the customer and vendorsegments served, the technology that determines the steel (tons) / Power (MWh) transfor-mation rate, start-up, idle, and shut-down timing and costs and overall plant production costs.
+
+## History Speaks
+
+To get the basic idea of risk measures across we develop the *value at risk* and *expected shortfall* metrics from the historical simulated distributions of risk factors. Given these riskfactors we combine them into a portfolio and calculate their losses. Finally with the *loss* distribution in hand we can compute the risk measures.
+
+
+We will use a purely, non-parametric historical simulation approach in this section. Thismeans that we will not need to compute means, standard deviations, correlations, or other statistical estimators, also known as parameters.
+
+First we need to get some data. We will use throughout these computations several libraries:
+
+1.`mvtnorm` builds multivariate normal (Gaussian) simulations and
+
+2.`QRM` estimates Student-t and generalized pareto distribution (GPD) simulation.
+
+3.We will hold off on these parametric approaches till later and start with historical simulation.
+
+4.The `psych` library helps us to explore the interactions among data through scatterplots and histograms.
+
+5.The `ggplot2` library allows us to build complex vizualizations that will aid the generation of further insights.
+
+We read in the csv file from the working directory. This file contains dates and several risk factors. In this setup we will use RWE stock prices will stand in for electricity price riskfactor input and THYSSEN stock prices for the steel price risk factor.
+
+
+```{r}
+# Download the data
+data.all <- read.csv("./data/eurostock.csv", stringsAsFactors = FALSE)
+
+# This will convert string dates to
+## date objects below
+
+str(data.all)
+```
+
+
+The next thing we must do is transform the data set into a time series object. The way wedo that is to make the dates into row names so that dates are the index for the two riskfactors. Making dates an index allows us to easily filter the data.
+
+```{r}
+str(row.names <- data.all$X)  ## We find that the first field X contains dates
+```
+
+
+```{r}
+date <- as.Date(row.names) ## convert string dates to date objects
+str(date) ## Always look at structure to be sure
+```
+
+
+```{r}
+rownames(data.all) <- date
+head(data.all)
+```
+
+
+
+```{r}
+tail(data.all) ## And always look at data
+```
+
+
+With this machinery in hand we can subset the data by starting and ending date as well as the choice of `RWE` and `TYYSSEN`
+
+```{r}
+# Subset the data using a start and 
+# end date
+
+start.date <- "1975-06-02"
+end.date <- "1990-12-30"
+## First column looks for filtered
+## dates, second and third columns
+## pull out prices
+
+price <- data.all[start.date <= date & date <= end.date, c("RWE", "THYSSEN")]
+
+## We add a check to ensure that price
+## is a matrix and that ncol will work
+
+if(!is.matrix(price)) {
+  price <- rbind(price, deparse.level = 0L)
+}
+str(price)
+```
+
+```{r}
+head(price) ## show the beginning
+```
+
+```{r}
+tail(price) ## and the en
+```
+
+
+
+The code before the `str, head, and tail` filters the price data by start and end dates. Wecould also perform this head and tail work using the following code.
+
+```{r}
+(end.idx <- dim(price)[1])
+```
+
+
+
+```{r}
+(price.2 <- rbind(price[1:5, ], price[(end.idx - 4):end.idx, ]))
+```
+
+
+## Try this exercise
+
+Now let’s really explore this data. The library `psych` has a prefabricated scatter plot his-togram matrix we can use. With this composite plot we can examine historical relationshipsbetween the two risk factors as well as the shape of the risk factors themselves. We can alsouse this device to look at dependent simulations. After the scatter plots, we then look atthe time series plots of the two factors.
+
+
+```{r}
+# Use scatter plots of the two price series along with their histograms
+# to examine the relationship
+# between REW and THYSSEN
+library(psych)
+pairs.panels(price)
+```
+
+
+```{r}
+price.rownames <- rownames(price)
+plot(as.Date(price.rownames), price[,"THYSSEN"],
+      type = "l",
+      main = "Thyssen stock price data", ## title
+      xlab = "Date t", ## x-axis label
+      ylab = expression(Stock ~ price ~ price[t]) ## y~axis label
+     )
+
+```
+
+
+```{r}
+plot(as.Date(price.rownames), price[,"RWE"],
+      type = "l",
+      main = "RWE stock price data", ## title
+      xlab = "Date t", ## x-axis label
+      ylab = expression(Stock ~ price ~ price[t]) ## y~axis label
+     )
+```
+
+The `pairs.panel` plot displays a matrix of interaction between `RWE` and `THYSSEN`. Prive levels are interesting but, as we have seen, are not stable predictors. Let's transform them into returns next.
+
+
+## Now to the Matter at Hand
+
+Now to the matter at hand: *value at risk* and *expected shortfall*. These ttwo measures are based on the quantile of losses attributable to risk factors. Value at risk is the quantile at an $\alpha$ level of tolerance. Expected shoftfall is the mean of the distribution beyond the value at risk threshold.
+
+TO get losses attributable to market risk factors we compute log price differences (also called log price relatives). These can be interpreted as returns, or simply as percentage changes, in the risk factor prices (superious regressions require transformation towards stationary processes).
+
+A plot lets us examine the results.
+
+```{r}
+# Here we can compute two items
+# together: log price differences
+# and their range (to bound a plot)
+
+return.range <- range(return.series <- apply(log(price)
+                                              , 2, diff)) ## compute log-returns and range
+
+return.range
+```
+
+
+```{r}
+plot(return.series, xlim = return.range,
+                    ylim = return.range,
+                    main = "Risk Factor Change",
+                    cex = 0.5
+      )
+```
+
+Using the returns we can now compute loss. Weights are defined as the value of the positionsin each risk factor. We can compute this as the notional times the last price. Remember weare talking about an input, electricity, and an output, steel. We form the margin:
+
+
+$$Margin = price_{steel} \times tons - price_{power} \times [(rate_{MWh/tons} \times tons)],$$
+
+where the last term is the power to steel transformation rate that converts power price dollars per MWh to dollars per tons.
+
+We convert prices to share prices and tons to equivalent values in terms of the number of shares. The naturally short position in power is equivalent to the negative number of shares (in the square brackets). THe naturally long position in steel is equivalent to a positive number of shares. By naturally short we mean that power is an input, incurs a cost, and is demanded by the plant, and supplied by a third party. By naturally long we mean that steel is an output, earns a revenue, and demanded by a third party.
+
+
+```{r}
+## Get last prices
+price.last <- as.numeric(tail(price, n = 1))
+
+## Specify the positions
+position.rf <- c(-30, 10)
+
+## And compute the position weights
+w <- position.rf * price.last
+
+# Fan thesea cross the length and 
+## breadth of the risk factor series
+weights.rf <- matrix(w, nrow = nrow(return.series),
+                      ncol = ncol(return.series), byrow = TRUE)
+
+# We need to compute exp(x) - 1 for
+# very small x: expm1 accomplishes
+# this
+
+loss.rf <- -rowSums(expm1(return.series) * weights.rf)
+
+summary(loss.rf)
+```
+
+
+
+```{r}
+loss.rf.df <- data.frame(Loss = loss.rf,
+                         Distribution = rep("Historical", 
+                                            each = length(loss.rf)))
+library(ggplot2)
+
+ggplot(loss.rf.df, aes(x = Loss, fill = Distribution)) + geom_density(alpha = 0.2) + xlim(-100, 100)
+```
+
+The plos reveals some interesting deep and shallow outliers. The distribution is definately very peaked. We use the base function `expm1` that computes the natural exponent of returns all minus 1.
+
+$$e^{r} -1$$
+
+Some of these returns, or percentage price changes if you will, are very close to zero. High precision arithmetic is needed to get acurate calculations. The function `expm1` does this well.
+
+Now we get to estimating value at risk (VaR) and expected shortfall (ES). WE set the tolerance level $\alpha$, for example, equal to 95%. This would mean that decision maker would not tolerate loss in more than 5% of all risk scenarios.
+
+We define the VaR as the quantile for probability $\alpha \in (0,1)$ as
+
+$$\text{VaR}_a(X) = inf\{x\in R: F(x) \ge \alpha\},$$
+
+which means find the greatest lower bound of loss $x$ (what the symbol  $inf = infimum$ means in Engish), such that the cumulative probability of $x$ is greater than or equal to $\alpha$.
+
+Using the $VaR_{a}$ definition we can also define ES as
+
+$$ES_a = E[X|X \ge VaR_{\alpha}]$$
+
+Where $ES$ is the "expected shortfall" and $E$ is the expectation operator, also known as the "mean". Again, in English, the expected shortfall is the average of all losses greater than the loss at a $VaR$ associated with probability $\alpha$, and $ES \ge VaR$.
+
+### Example
+
+First the computation of VaR and ES:
+
+
+```{r}
+# Simple Value at Risk
+alpha.tolerance <- 0.99
+(VaR.hist <- quantile(loss.rf, probs = alpha.tolerance,
+                      names = FALSE))
+```
+
+```{r}
+# Just as simple Expected shortfall
+(ES.hist <- mean(loss.rf[loss.rf > VaR.hist]))
+```
+
+Next we set up the text and plotting enviroment.
+
+```{r}
+VaR.text <- paste("Value at Risk =", round(VaR.hist, 2))
+
+ES.text <- paste("Expected Shortfall =", round(ES.hist, 2))
+
+ggplot(loss.rf.df, aes(x = Loss, fill = Distribution)) + geom_density(alpha = 0.2) +
+  geom_vline(aes(xintercept = VaR.hist), linetype = "dashed", size = 1, color = "blue") + 
+  geom_vline(aes(xintercept = ES.hist), size = 1, color = "blue") + 
+  xlim(0, 200) +
+  annotate("text", x = 40, y = 0.03, label = VaR.text) + 
+  annotate("text", x = 140, y = 0.03, label = ES.text)
+                                                                                          
+```
+
+We see that `ES` is much bigger than `VaR` but also much less than the maximum historical loss.
+
+
+One note: `VaR` is computed as a pre-event indicator beyond a loss of 0 in this example. Many applications of this metric center loss at the median loss. Thus, loss would be computed as gross loss minus the median (50th percentile of loss).
+
+
+A box plot might also help us visualize the results without resorting to a probability distribution function.
+
+```{r}
+ggplot(loss.rf.df, aes(x = Distribution,
+                       y = Loss)) + 
+  geom_boxplot(outlier.size = 1.5, outlier.shape = 21) + 
+  ylim(-250, 10)
+```
+
+
+This box plot might look better with more than one distribution. So far we simple let history speak for itself. We didn't assume anything at all about the shape of the data. WE just used the empirical record be the shape. In what follows let's start to put some different shapes into the loss potential of our tolling agreement.
+
+## Carl Friedrich Guass, I Pressume...
+
+
+What we just did was the classic historical simulation technique for computing tail risk measures. Historical simulation is a "nonparametric" technique, since there is no estimation of parameters conditional on a distribution. Only history, unadorned, informs risk measurement: Now we shift gears into the parametric work of Gauss: Gaussian, Generalized Pareto and as an excerise Gossett's (Student's) distributions.
+
+Carl Friedrich Gauss is often credited with the discovery of the normal distribution. So wetack his name often enough to the normal distribution. This distribution has a crucial rolein quantitative risk and finance. It is often the basis for most derivative pricing models andfor simulation of risk factors in general.  It does not exhibit thick tails, and definitely isnot skewed or peaked. This distribution definitely does not describe volatility clustering weobserve in most financial and commodity time series. Nevertheless, it is otherwise ubiquitous,if only as a benchmark (like “perfect competition” or “efficient markets”).
+
+With just a little of math here, we can define the Gaussian (normal) distribution function. If $x$ is a uniformly distributed random variable, then
+
+$$
+f ( x ) = \frac { 1 } { \sigma \sqrt { 2 \pi } } e ^ { - ( x - \mu ) ^ { 2 } / 2 \sigma ^ { 2 } }
+$$
+
+is the probability density function of the normally distributed $x$ with mean $\mu$ and standard deviation $\sigma$.
+
+"Halfway" between the normal Gaussian distribution and Student's t is the chi-square, $\chi^2$, distribution. We define $\chi^2$ as the distribution of the sum of te square normal distribution variables $x$ with density function and $k$ degrees of freedom for $x > 0$:
+
+
+$$
+f ( x ) = \frac { x ^ { ( k / 2 - 1 ) } e ^ { - x / 2 } } { 2 ^ { k / 2 } \Gamma \left( \frac { k } { 2 } \right) }
+$$
+
+and 0 otherwise. The "degrees of freedom" are the number of normal distributions used to create a chi-square variate.
+
+Now on to Student's t distribution which is defined in terms of the Gaussian and chi-square distribution as the ratio of a Gaussian random variate to the square root of a chi-squared random varite. Student (a pseudonum for William Sealy Gossett) will has thicker tails but also the same symmetry as the normal curve.
+
+Here isa quick comparison of the standard Guassian and the Student's t distribution. The functions `rnorm` and `rt` generate Guassian and Student's t variates, respectively. The function `qnorm` and `qt` compute the distance from the mean (probability = 50%) for a given probability here stored in `alpha.tolerance`.
+
+
+```{r}
+library(mvtnorm) ## Allows us to generate Gaussian and Student-t variates
+library(ggplot2)
+set.seed(1016)
+
+n.sim <- 1000
+z <- rnorm(n.sim)
+t <- rt(n.sim, df = 5)
+alpha.tolerance <- 0.95
+(z.threshold <- qnorm(alpha.tolerance))
+```
+
+```{r}
+(t.threshold <- qt(alpha.tolerance, df = 5))
+```
+
+We now make a data frame and plot with `ggplot:`
+
+```{r}
+zt.df <- data.frame(Deviations = c(z, t), Distribution = rep(c("Gaussian", "Student's t"), each = n.sim))
+
+ggplot(zt.df, aes(x = Deviations, fill = Distribution)) + 
+  geom_density(alpha = 0.3) + geom_vline(aes(xintercept = z.threshold),
+                                         color = "red",
+                                         linetype = "dashed",
+                                         size = 1
+                                         ) + 
+                              geom_vline(aes(xintercept = t.threshold),
+                                         color = "blue",
+                                         linetype = "dashed",
+                                         size = 1) + xlim(-3, 3)
+```
+
+We see the two distributions are nearly the same in appearance. But the Student’s t tail isindeed thicker in the tail as the bluetdensity overtakes the redzdensity. This is numerically evident as the `t.threshold` is `>` than the `z.threshold` for a cumulative probability of 95% the 95th quantile.
+
+
+let's zoom in on the right tail of the distribution with the xlim facet.
+
+```{r}
+ggplot(zt.df, aes(x = Deviations, fill = Distribution)) + 
+  geom_density(alpha = 0.2) + 
+  geom_vline(aes(xintercept = z.threshold), color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = t.threshold), color = "blue", linetype = "dashed", size = 1) +
+  xlim(1, 5)
+```
+
+Interesting digression! But not really too far off the mark. The thresholds are the same with two standard risk measures, scalled for particular risk factors and positions. We have simulated two different *values at risk.*
+
+## Back to the Future
+
+Let's remember where the returns (as changes) in each risk factor come from. Also, we will extract the last price for use below.
+
+
+```{r}
+# Again computing returns as changes
+# in the risk factors
+
+return.series <- apply(log(price), 2, diff) ## compute the risk-factor change
+
+price.last <- as.numeric(tail(price, n = 1)) ## reserve last price
+```
+
+
+Again to emphasize what constitutes this data, we specify the notional exposure. These arenumber of shares of stock, number of 1 dollars million contracts of futures, or volumetric contract sizes, e.g., MMBtus or boe. All of these work for us given the that price is dimensioned relative to the notional dimension.
+
+
+So if the risk factors are oil and natural gas prices, then we should use a common volumetric equivalent such as Btu (energy content) or boe (barrel of oil equivalent for volume). Position weights are then calculated as position times the last available price.
+
+
+First, we can set the weights directly and a little more simply than before since we do notneed to simulate historically.
+
+
+```{r}
+## Specify the positions
+positions.rf <- c(-30, 10) ## As before
+## And compute the position weights
+## directly again as before
+
+(w <- position.rf * price.last)
+
+```
+
+Second, we estimate the mean vector and the variance-covariance matrix, the two major inputs to the simulation of normal risk factor changes. Here we use a purely parametric approach.
+
+```{r}
+mu.hat <- colMeans(return.series) ## Mean vector mu; estimated = hat
+Sigma.hat <- var(return.series) ## Variance-covariance matrix Sigma
+(loss.mean <- -sum(w * mu.hat))
+```
+
+```{r}
+(loss.stdev <- sqrt(t(w) %*% Sigma.hat %*% w))
+## Standard deviation of losses
+```
+
+
+Third we set the level of risk tolerance $\alpha$. Then let's calculate `VaR` and `ES`:
+
+```{r}
+# Compute VaR and ES and return
+alpha.tolerance <- 0.95
+q.alpha <- qnorm(alpha.tolerance)
+(VaR.varcov <- loss.mean + loss.stdev * q.alpha)
+```
+
+```{r}
+(ES.varcov <-loss.mean+loss.stdev*dnorm(q.alpha)/(1-alpha.tolerance))
+```
+
+and plot
+
+```{r}
+VaR.text <-paste("Value at Risk =",
+                 round(VaR.varcov,2))
+
+ES.text <-paste("Expected Shortfall =",
+                round(ES.varcov,2))
+
+ggplot(loss.rf.df,aes(x =Loss,fill =Distribution)) + geom_density(alpha =0.2) + 
+  geom_vline(aes(xintercept =VaR.varcov),colour ="red",size =1) + 
+  geom_vline(aes(xintercept =ES.varcov),colour ="blue",size =1) + 
+  xlim(0,200) + 
+  annotate("text",x =30,y =0.03,label = VaR.text) + 
+  annotate("text",x =120,y =0.03,label = ES.text)
+```
+
+
+## Try this example
+
+Suppose it takes less electricity to make steel than we thought above. We can model this by changing the position to `(-20, 10)`. Let's redo steps, 1, 2 and 3 (this begs for a function).
+
+First we can set the weights directly a little more simply than before since we do not need to simulate history.
+
+
+```{r}
+## Specify the positions
+position.rf <- c(-20, 10)
+
+## And compute the position weights
+# directly again as before
+
+(w <- position.rf * price.last)
+```
+
+Second, estimate the mean vector and the variance-covariance matrix, the two major inputs to the simulation of normal risk factor changes. Here we use a purely parametric approach.
+
+```{r}
+mu.hat <- colMeans(return.series) ## Mean vector mu; estimated = hat
+Sigma.hat <- var(return.series) ## Variance-covariance matrix Sigma
+(loss.mean <- sum(w * mu.hat)) ## Mean loss
+```
+```{r}
+(loss.stdev <- sqrt(t(w) %*% Sigma.hat %*%
+                      w )) ## Standard deviation of loss
+```
+
+
+Third, set the level of risk tolerance $\alpha$. Then calculate `VaR` and `ES`.
+
+```{r}
+# Compute VaR and ES and return
+alpha.tolerance <- 0.95
+q.alpha <- qnorm(alpha.tolerance)
+(VaR.varcov <- loss.mean + loss.stdev * q.alpha)
+```
+
+```{r}
+(ES.varcov <- loss.mean + loss.stdev * dnorm(q.alpha)/(1 - alpha.tolerance))
+```
+
+... and plot
+
+
+```{r}
+VaR.text <- paste("Value at Risk =", round(VaR.varcov, 2))
+
+ES.text <- paste("Expected Shoftfall = ", round(ES.varcov, 2))
+
+ggplot(loss.rf.df, aes( x  = Loss, fill = Distribution)) + 
+  geom_density(alpha = 0.2) + 
+  geom_vline(aes(xintercept = VaR.varcov),  colour = "red", size = 1) + 
+  geom_vline(aes(xintercept = ES.varcov), color = "blue", size = 1) + 
+  xlim(0, 200) + annotate("text",
+                          x = 20,
+                          y = 0.04,
+                          label = VaR.text) +
+  annotate("text",
+       x = 100,
+       y = 0.04,
+       label = ES.text)
+```
+
+Aesthetics may overtake us here as we really should change the `x` and `y annotate` coordinates to fit on the graph properly.
+
+So ends the story of the main method used for years and emodied in the famous 4:15pm risk report at JP Morgan. Also, we remember the loss that we simulate here is an operating income loss which after taxes and other adjustements, and say, a one year horizon, means a loss of additions to retained earnings. Book equity drops and so will market capitalization on average.
+
+
+## Let's go to Extremes
+
+All along we have been stylizing financial returns, including commodities and exchanges, as skewed and with thick tails. We next go on to investigate these tails further using an extreme tail distribution called the Generalized Pareto Distributin (GPD). For very high thresholds, such as value at risk and expected shortfall. GDP not only well describes behavior in excess of the threshold, but the mean excess over the threshold is linear in the threshold. From this we get more intuition around the use of expected shortfall as a coherent risk measure. In recent years markets well exceeded all Gaussian and Student's threholds.
+
+For a random variate $x$, this distribution is defined for shape parameter $\xi \ge 0$ as:
+
+$$g(x; \xi \ge 0) = 1 - (1 + x\xi/\beta)^{-1/\xi}$$
+and when the shape parameter = $\xi = 0$, the GPD becomes the exponential distribution dependent only on the scale parameter $\beta$:
+
+$$
+g ( x ; \xi = 0 ) = 1 - \exp ( - x / \beta )
+$$
+
+There is one reason for GPD's notoriety. if $u$ is an upper (very high) threshold, then the excess of threshold function for the GPD is
+
+$$
+e ( u ) = \frac { \beta + \xi u } { 1 - \xi }
+$$
+
+This simple measure is *linear* in thresholds. It will allow us to visualize where rate events begin. We will come back to this property when we look at operational loss data in a few chapters.
+
+Let's use the `QRM` library to help us find th eoptimal fit of losses to the paramters. THe `fit.GPD` function will do this for us.
+
+
+```{r}
+library("QRM")
+
+u <- quantile(loss.rf, alpha.tolerance,
+              names = FALSE)
+
+fit <- fit.GPD(loss.rf, threshold = u) ## Fit GDP to the excesses
+(xi.hat <- fit$par.ests[["xi"]]) ## fitted xi
+```
+
+```{r}
+(beta.hat <- fit$par.ests[["beta"]]) ## fitted beta
+```
+
+
+Now for the closed form (no random variate simulation!)
+```{r}
+## Pull out th elosses over the
+## threshold and compute excess over
+## the threshold
+
+loss.excess <- loss.rf[loss.rf > u] - u ## Comput the excesses over u
+
+n.relative.excess <- length(loss.excess)/ length(loss.rf)  ## = N_u/n
+(VaR.gpd <- u + (beta.hat/xi.hat) *  (((1 - alpha.tolerance)/n.relative.excess)^(-xi.hat) -1))
+```
+
+```{r}
+(ES.gpd <- (VaR.gpd + beta.hat - xi.hat * u)/(1 - xi.hat))
+```
+
+
+### Example
+
+How good a fit to the data have we found? This plot should look roughly uniform since the GPD excess loss function is a linear function of thresholds `u`.
+
+```{r}
+gpd.density <- pGPD(loss.excess , xi = xi.hat, beta = beta.hat)
+
+gpd.density.df <- data.frame(Density = gpd.density, 
+                             Distribution = rep("GPD", each = length(gpd.density))) # This should be U[0,1]
+
+ggplot(gpd.density.df, aes(x = Density, fill = Distribution)) + geom_histogram()
+```
+
+And it does look "uniform" enough (in a statistical sort of way as we perform eyeball econometrics again!).
+
+
+## All Together Now
+
+Let's graph the historical simulation, variance-covariance and GPD results together.
+
+
+```{r}
+loss.plot <- ggplot(loss.rf.df, aes(x = Loss, fill = Distribution)) + geom_density(alpha = 0.2)
+
+loss.plot <- loss.plot + geom_vline(aes(xintercept = VaR.varcov), color = "red",
+                                    linetype = "dashed",
+                                    size = 1)
+loss.plot <- loss.plot + geom_vline(aes(xintercept = ES.varcov), colour = "blue",
+                                    linetype = "dashed", size = 1)
+
+loss.plot <- loss.plot + geom_vline(aes(xintercept = VaR.gpd), 
+                                    colour = "red",
+                                    size = 1)
+
+loss <- loss.plot + geom_vline(aes(xintercept = ES.gpd), colour = "blue",
+                               size = 1)
+
+loss.plot <- loss.plot + xlim(0,200)
+
+loss.plot
+```
+
+
+That was a lot. We will need our "mean over excess" knowledge when we get to operational risk. Actually, we will be able to apply that to these risk measures for any kind of risk. But we will save ourselves for operational risk later. Someone might even annotate the graph...
+
+# Credit Risk (Missing)
+
+
+
+
+
+# Operational Risk and Extreme Finance
+
+## Imagine this
+
+Remember that company we just acquired? Not only is customer creditworthiness apt to cost us another $80 million, but our walk-through of distribution, call-center, and production facilities had a raft of negatively impacting issues with health and safety, enviromental, and intellectual property all located in places rife with fraud and corruption.
+
+Now only that, but (5 years ago!) hurricane damange has still not been rectified. Our major insurance carrier has also just pulled out of underwriting your fire-related losses. To seemingly top it all off, three Bp's of regional manufacturing have just been indicted for padding vendor accounts for kickbacks. To add insult to injury, employee turnover rates are over 40%
+
+Previously we studied the stylized facts of financial variables, market risk, and credit risk.A common theme runs through this data and outcomes: thick tails, high Value at Risk and Expected Shortfall. Rare events can have strong and persistent effects. Then there is the probability of contagion that allows one bad market to infect other markets. 
+
+Now we need to consider more formally the impact of extreme, but rare events on financial performance. To do this we will start off with modeling potential loss in two dimensions,frequency of loss and severity. Frequency of losses, modeled with a Poisson process. The Poisson process is at the heart of Markov credit risks. Each transition probability stems froman average hazard rate of defaults in a unit of time and a segment of borrowers. Here wewill use a simplified sampling of frequencies of events drawn from a Poisson process similarto the one we used in credit risk measurement.
+
+Severity is defined as currency based loss.  In credit this is the unrecoverable face value,accrued interest, and administrative expenses of a defaulted credit instrument such as aloan.  In operational risk this loss could be the value of customers lost due to a cyber breach, or suppliers failing to deliver critical goods and services resulting in unmet demand,or reputation with investors leading to a flight of capital.  We will typically use gammaor generalized Pareto distributions to help us model severity. In some equity markets, thelog-normal distribution is prevailing practice.
+
+* Mean Excess Loss from reliability and vulnerability analysis
+* Historical data
+* VaR and ES again
+
+## What is Operational Risk
+
+This is a third major category of risk that includes everything from the possibility of process failure, to fraud, to natural (and our own homemade) disaster, errors, omissions, in other words, having lots of really bad days.
+
+In a nutshell we measure operational risk using `frequency` and `severity`. Again there is analogy to credit risk where the frequency is the probability of default and severity is recoverable exposure. Here we think of the probability of loss as how often a loss could occur, its `likelihood`. Infused into `likelihood` are opinions about "how often", "how fast", "how long" (before detection, response, correction), "how remote" (or "immenent"), among other potential suspects.
+
+On the other hand we think of `severity` as the monetary loss itself. This loss is beyond the `threshold`, and thus the focus on "extreme" value methods of dealing with distributions. The "extreme" will be the tail of the distribution where probably but rate events with large magnitudes roam.
+
+In typical experience in most organizations, there is no good time series or cross-section of data on which to reply for measurements of operational risk.For example, the emerging and immanent risks of botnets wreaking havoc in our computer operating systems have really only a little loss data available for analysis. The problem with this data is that only certain aspects of the data are disclosed, they are supremely idiosyncratic, that is, applicable tohighly specialized environments, and often seem far to much an estimate of enterprise-wide loss.  Where we do have some data, we have established ways of working with severity distributions that make will sense of the shape of the data.
+
+
+### Example
+
+Suppose management, after much discussion and challenge by subject matter experts, determines that:
+
+
+1. The median loss due to a vulnerability of a known cyber breach is $60 million
+
+2. With an average (or median) frequency of 25%
+
+3. All in a 12 month cycle.
+
+4. Management also thinks that the variation in their estimates is abou2 $20 million.
+
+We sometimes call this the "volatility of the estimate" as it expresses the degree of managerial uncertainty about the size of the loss.
+
+1. How would we quantify this risk?
+
+2. How would we manage this risk?
+
+
+
+Here are some steps management might take to measure and mitigate this operational risk:
+
+1. Develop a cyber risk taxonomy, For example look at NIST and ISO for guidance.
+
+2. Develop clear definitions of frequency and severity in terms of how often and how much. Calibrate to a metric like operational income.
+
+3. Develop range of operational scenarios and score their frequency and severity of impact on operating income.
+
+4. Aggregate and report ranges of median and quantile potential loss.
+
+
+This last step puts a "value" on operational risk scenarios using a rate of error that, if exceeded, would put the organization at ongoing risk that management is not willing to tolerate. This "significance level" in data anlaytics is often called "alpha" or $\alpha$. An $\alpha = 5$ percent indicates that management, in a time frame such as one year, is not willing to be wrong more than 1 in 20 times about its experience of operational risk. Management believes that are 95 percent $(1 - \alpha)$ confident in their measurements and management of risk. It is this sort of thinking that is at the heart of statistically based confidence and hypothesis testing.
+
+## How Much?
+
+Managers can use several probability distributions to express their preferences for risk of loss. A populat distribution is the `gamma` severity function. This function allows for skewness and "heavy" tails. Skewness means that loss to attenuated and spread away from the mean or media, stretching occurances further into the tail of the loss distribution.
+
+the gamma distribution is fully specificed by shape, $\alpha$ and scale,$\beta$, parameters. The shape aparameter is a dimensionless number that affects the size and skewness of the tail. The scale parameter is a measure of central tendency "scaled" by the standard deviation of the loss distribution. Risk specialists find this distribution to be especially useful for time-sensitive losses.
+ 
+We can specify the $\alpha$ shape and $\beta$ scale parameters using the mean, $\mu$, and standard deviation, $\sigma$ of the random severity, $X$ as
+
+$$\beta = \mu/\sigma^2,$$
+
+and 
+
+
+$\alpha = \mu\beta$
+
+and this is the same as 
+
+$$\alpha = \mu^2/\sigma^2$$
+
+Here $\beta$ will have dimension of $LOSS^{-1}$, while $\alpha$ is dimensionless. The probability that a loss will have exactly $X$, conditional on $\alpha$ and $\beta$ is
+
+$$
+f ( x | a l p h a , \beta ) = \frac { \beta ^ { \alpha } x ^ { \alpha - 1 } e ^ { - x \beta } } { \Gamma ( \alpha ) }
+$$
+
+Where
+
+$$
+\Gamma ( x ) = \int _ { 0 } ^ { \infty } x ^ { t - 1 } e ^ { - x } d x
+$$
+
+Enough of the math, although very useful for term structure interpolations, and transforming beasts of expressions into something tractable. Let's finally implement into R.
+
+```{r}
+set.seed(1004)
+n.sim <- 1000
+
+mu <- 60 ## The mean
+sigma <- 20 ## management's view of how certain they think their estimates are 
+sigma.sq <- sigma^2
+beta <- mu/sigma.sq
+alpha <- beta * mu
+severity <- rgamma(n.sim, alpha, beta)
+summary(severity)
+```
+
+The distribution is dispersed from a low of 15 to a high of over 120 mullion dollars. We check with management that this low and high (and intermediate levels) are reasonable. Let's graph the distribution. Here we form a data frame in `gama.sev` to create factor values for the `ggplot` fill.
+
+```{r}
+library(ggplot2)
+gamma.sev <- data.frame(Severity = severity,
+                        Distribution = rep("Gamma", each = n.sim))
+
+ggplot(gamma.sev, aes(x = Severity, fill = Distribution)) + geom_density(alpha = 0.3)
+
+```
+
+
+### Severity thresholds
+
+We can add thresholds based on Value at Risk (`VaR`) and expected shortfall `ES`. Here we calculate `VaR.sev` as the quantile of a confidence level of $1 - \alpha$.
+
+
+```{r}
+alpha.tolerance <- 0.05
+(VaR.sev <- quantile(severity, 1 - alpha.tolerance))
+(ES.sev <- mean(gamma.sev$Severity[gamma.sev$Severity > VaR.sev]))
+```
+
+Plot them onto the distribution using the `geom_vline` feature in `ggplot2`. What is the relationship between `VaR` and `ES`?
+
+```{r}
+ggplot(gamma.sev, aes(x = Severity, fill = Distribution)) + 
+  geom_density(alpha = 0.3) + geom_vline(xintercept = VaR.sev, color = "red") +
+  geom_vline(xintercept = ES.sev, color = "blue")
+```
+
+
+What is the relationship between `Var` and `ES?` As it should be, the VaR is less than the `ES`. For this risk of potential cyber breach vulnerability, management might think of setting aside capital proportional to `ES.sev - quantile(severity, 0.50)`, that is the difference between the expected shortfall and the median potential loss. The modifier "proportional" needs some further specifications. We have to consider the likelihood of such a risk event.
+
+
+## How Often
+
+We usually model the frequency of a loss event with a `poisson` distribution. This is a very basic counting distribution defined by the rate of arrival of an event. $\lambda$ in a unit of time. This rate is just what we struggled to estimate for credit rating transitions.
+
+Again for completeness sake and as a reference, we define the probability of exactly $x$ risk events arriving at a rate of $\lambda$ as
+
+
+$$
+\operatorname { Probability } [ x | \lambda ] = \frac { \lambda ^ { x } e ^ { - \lambda } } { x ! }
+$$
+
+Management might try to estimate the count of events in a unit of time using hazard rate models (same $\lambda$ as in credit migration transitions). Here we simulate management's view with $\lambda = 0.25$. Our interpretation of this rating is that management believes that a vulnerability event will happen in the next 12 months once every 3 months (that is once every four months).
+
+
+We simulate by using `n.sim` trials drawn with the `rpois()` function conditional on $\lambda = 0.25$.
+
+```{r}
+n.sim <- 1000
+lambda <- 0.25
+frequency <- rpois(n.sim, lambda)
+summary(frequency)
+```
+
+`summary` is not very informative so we also plot this distribution using this code:
+
+```{r}
+poisson.freq <- data.frame(Frequency = frequency, 
+                           Distribution = rep("Poisson", each = n.sim))
+
+ggplot(poisson.freq, aes(x = frequency, fill = Distribution)) + geom_density(alpha = 0.3)
+```
+
+This shows a smooth version of the discrete event count: more likely zero, then one event then two, then three events, all of which divides the 12 months into four, 3-month event intervals.
+
+
+## How Much Potential Loss?
+
+Now we get to the nub of the matter, how much potential can we lose? This means we need to combine frequency with severity. WE need to "convolve" the frequency and severity distributions together to form one loss distribution. "To convolve" means that for each simualted cyber dollar loss scernario we see whether the scenario occurs at all using many `poisson` frequency scenarios. 
+
+THis convolution can be accomplished in the following code:
+
+```{r}
+loss <- rpois(n.sim, severity * lambda)
+summary(loss)
+
+```
+
+1. This code takes each of the `gamma` distributed severities `(n.sim` of them) asks how often one of them will occur (`lambda`).
+
+2. It then simulates the frequency of these risk events scalled by the `gamma` severities of the loss size.
+
+3. The result is a *convolution* of all `n.sim` of the severities with all `n.sim` of the frequencies. We are literally combining each scenario with every other scenario.
+
+Let's visualize our data. Then calculate the risk measures for the potential loss as
+
+```{r}
+alpha.tolerance = 0.95
+
+loss.rf <- data.frame(Loss = loss, Distribution = rep("Potential Loss", 
+                                                      each = n.sim))
+(VaR.loss.rf <- quantile(loss.rf$Loss,
+                         1 - alpha.tolerance))
+```
+
+```{r}
+(ES.loss.rf <- mean(loss.rf$Loss[loss.rf$Loss > VaR.loss.rf]))
+```
+
+Again `VaR` is a quantile and `ES` is the mean of a filter on the convolved losses in excess of the `VaR` quantile.
+
+
+### Example
+
+1. Plot the loss fucniton and risk measures with
+
+```{r}
+ggplot(loss.rf, aes(x = Loss, fill = Distribution)) + geom_density(alpha = 0.3) + 
+  geom_vline(xintercept = VaR.loss.rf, color = "red") + geom_vline(xintercept = ES.loss.rf, color = "blue")
+```
+
+2. What would you advise management about how much capital might be needed to underwrite these losses?
+
+Some results using this code:
+
+```{r}
+ggplot(loss.rf, aes( x = Loss, fill = Distribution)) + geom_density(alpha =0.3) + 
+  geom_vline(xintercept = VaR.loss.rf, color = "red") + geom_vline(xintercept = ES.loss.rf, color = "blue")
+```
+
+Management should consider different risk tolereances first. Then the organization can decide on the difference between the `VaR` (or `ES`) and the median loss.
+
+```{r}
+loss.rf <- data.frame(Loss = loss,
+                      Distribution = rep("Potential Loss", each = n.sim))
+
+(VaR.loss.rf <- quantile(loss.rf$Loss, 1 - alpha.tolerance))
+```
+
+
+```{r}
+(ES.loss.rf <- mean(loss.rf$Loss[loss.rf$Loss > VaR.loss.rf]))
+```
+
+```{r}
+(Reserve.loss.rf <- ES.loss.rf - quantile(loss.rf$Loss, 0.5))
+```
+
+
+If this were a bank, then amangers would have calculated the capital requirement (Basel III)
+
+
+## We Have History
+
+Now suppose we have some history of losses. In this context, we use an extreme tail distribution called the Generalized Pareto Distribution (GPD) to estimate historical loss parameters. This distribution models the tails of any other distribution. We would have splot a `poisson-gamma` loss distribution into two parts, a body and a tail. The tail would begin at a specified threshold.
+
+The GPD is especially well-known for a single property: for very high thresholds, GPD notonly well describes the behavior in excess of the threshold, but the mean excess over thethreshold is linear in the threshold. From this property we get more intuition around theuse of Expected Shortfall as a coherent risk measure. In recent years we well exceeded all Gaussian and Student’s t thresholds in distressed markets.
+
+For a random variate $x$, the GPD distribution is defined for the scale parameter $\beta$ and shape parameter $\xi \ge 0$ as:
+
+$$
+g ( x ; \xi \geq 0 ) = 1 - ( 1 + x \xi / \beta ) ^ { - 1 / \xi }
+$$
+
+and when the shape parameter $\xi = 0$, the GPD becomes the exponential distribution dependent only on the scale parameter $\beta$:
+
+$$
+g ( x ; \xi = 0 ) = 1 - \exp ( - x / \beta )
+$$
+
+Now for the infamous property. If $u$ is an upper (very high) threshold, then the excess of the threshold function for the GPD is:
+
+$$
+e ( u ) = \frac { \beta + \xi u } { 1 - \xi }
+$$
+This simple measure is linear in thresholds. It will allow us to visualize where rare events begin. We will use as a threshold to exceedance that begins to make the excesses linear.
+
+
+## Fire Losses
+
+Now to get some data. The first thing we do is load the well researched Danish fire claims data set in millions of Danish Kroner collected from 1980 to 1990 as a time series object. we will plot the Mean Excesses (of thresholds). These are simply the mean of $e(u)$, a function of the parameters of the GPD. We will follow very closely the code and methodology used in the `qrmtutorial`
+
+
+```{r}
+library(QRM)
+## Load Danish fire loss data and look
+## at structure and content
+data(danish)
+str(danish)
+```
+
+
+```{r}
+head(danish, n = 3)
+```
+
+```{r}
+tail(danish, n = 3)
+```
+
+```{r}
+## Set Danish to a numeric series
+## object if a time series
+
+if (is.timeSeries(danish)) danish <- series(danish)
+danish <- as.numeric(danish)
+```
+
+We review the dataset.
+
+```{r}
+summary(danish)
+```
+
+
+Our next task is to sort out the losses and rank order unique losses with this function.
+
+```{r}
+n.danish <- length(danish)
+## Sort and rank orer unique losses
+
+rank.series <- function(x, na.last = TRUE){
+  ranks <- sort.list(sort.list(x, na.last = na.last))
+  if (is.na(na.last)){
+    x <- x[!is.na(x)]
+  }
+  
+  for (i in unique(x[duplicated(x)])){
+    which <- x == i & !is.na(x)
+    ranks[which] <- max(ranks[which])
+  }
+  ranks
+  
+}
+```
+
+Now we use the `rank.series` function to create the mean excess function point by point through the sorted series of loss data. In the end we want to cumulatively sum data in a series of successive thresholds.
+
+```{r}
+danish.sorted <- sort(danish) ## From low to high
+## Create sequence of high to low of
+## indices for successive thresholds
+
+n.excess <- unique(floor(length(danish.sorted) - 
+                           rank.series(danish.sorted)))
+
+points <- unique(danish.sorted) ## Just the unique losses
+n.points <- length(points)
+## Take out last index and last
+## data point
+
+n.excess <- n.excess[-n.points]
+points <- points[-n.points]
+## Compute cumulative sum series of
+## losses
+excess <- cumsum(rev(danish.sorted))[n.excess] - 
+  n.excess * points
+
+excess.mean <- excess/n.excess ### Finally the mean excess loss series
+```
+
+So much happened here. Let's spell this out again:
+
+1. Sort the data
+
+2. Construct indices for successive thresholds
+
+3. With just unique losses throw out the last data point, and its index
+
+4. Now for the whole point of this exercise: calculate the cumulative sum of losses by threshold (the `[n.excess]` operator) in excess of the cumulative threshold `n.excess*points`
+
+5. Then take the average to get the mean excess loss series.
+
+## Example
+
+```{r}
+library(ggplot2)
+
+omit.points <- 3
+excess.mean.df <- data.frame(Excess.Mean = excess.mean[1:(n.points - omit.points)], Thresholds = points[1:(n.points - omit.points)], 
+                          Distribution = rep("GPD",
+                each = length(excess.mean[1:(n.points - omit.points)])))
+
+```
+
+
+2. plot the mean excess series against the sorted points. In this case we will omit the last 3 mean excess data points.
+
+
+```{r}
+## Mean Excess plot
+ggplot(excess.mean.df, aes(x = Thresholds,
+                           y = Excess.Mean)) + geom_line() + 
+  geom_point(size = 1, shape = 22, colour = "red", fill = "pink") + 
+  geom_vline(xintercept = 40) + geom_vline(xintercept = 60)
+```
+
+
+This plot shows that the mean of any excess over each and every point grows linearly with each threshold. As the mean excesses get larger, they also become more sparse, almost like outliers. They are rare events we might want to mitigate. We might look at the vertical line at 40 and 60 million kroner to possibly design retention and limits for a contract to insure against experiencing loss in this region.
+
+
+```{r}
+## Plot density
+ggplot(excess.mean.df, aes( x = Excess.Mean,
+                            fill = Distribution)) + geom_density() + 
+  xlim(0,75)
+```
+
+
+This density plot confirms the pattern of the mean excess plot. The mean excess distribution is understood by engineers as the mean residual-life of a physical component. In insurance on the other hand, if the random variavle $X$ is a model of insurance losses, like the `danish` data set, then the conditional mean $E(X - u|X > u)$ is the expected claim payment per loss given that the loss has exceeded the deductible of $u$. In this interpretation, the conditional mean $E(X - t| X > t)$ is called the mean excess loss funciton.
+
+
+## Estiamting the Extremes
+
+Now we borrow some Generalized Pareto Distribution code from our previous work in market risk and apply it to the `danish` data set.
+
+```{r}
+alpha.tolerance <- 0.95
+u <- quantile(danish, alpha.tolerance,
+              names = FALSE)
+
+fit.danish <- fit.GPD(danish, threshold = u) ## Fit GPD to the excesses
+(xi.hat.danish <- fit.danish$par.se[["xi"]]) ## fitted xi
+```
+
+
+```{r}
+(beta.hat.danish <- fit.danish$par.ses[["beta"]])
+```
+
+Let's put these estimates to good use. Here are the closed form calculations for value at risk and expected shortfall (no random variate simulations!) using the formulae in chapter 5:
+
+```{r}
+## Pull out the losses over the
+## threshold and compute excess over
+## the threshold 
+loss.excess <-danish[danish>u]-u  ## compute the excesses over u 
+n.relative.excess <-length(loss.excess)/length(danish)  ## = N_u/n
+
+(VaR.gpd <-u+(beta.hat.danish/xi.hat.danish)*(
+  ((1-alpha.tolerance)/n.relative.excess)^(-xi.hat.danish)-1))
+```
+
+```{r}
+(ES.gpd <- (VaR.gpd + beta.hat.danish - xi.hat.danish * u)/ (1 - xi.hat.danish))
+```
+
+Using these risk measures we can begin to have a discussion around the size of reserves,the mitigation of losses, and the impact of this risk on budgeting for the allocation of risk tolerance relative to other risks.
+
+
+How good a fit? Let's run this code next.
+
+```{r}
+z <-pGPD(loss.excess,xi = xi.hat.danish,beta =beta.hat.danish)  ## should be U[0,1]
+
+plot(z,ylab ="Fitted GPD applied to the excesses")  ## looks fine
+```
+
+
+
+```{r}
+hist(z,xlab ="z = prob(loss.excess)",
+     ylab ="Count of Excess",
+     main ="GPD Goodness of Fit")
+
+```
+
+And it is as most of the excess are in the tail
+
+## Example
+Let's try other thresholds to sensitize ourselves to the GPD fit and coefficients.
+
+```{r}
+## Fit GPD model above 10
+
+u <- 10
+fit.danish <- fit.GPD(danish, threshold = u)
+(RM.danish <- RiskMeasures(fit.danish, c(0.99, 0.995)))
+```
+
+Now let's look at the whole picture with these exceedances. On the vertical axis we have the probabilities that you are in the tail ...  the extreme loss of this operation. On the vertical axis we have the exeedances (loss over the threshold $u$). The horizontal line is our risk tolerance (this would be `h` percent of the time we don't want to see loss...)
+
+```{r}
+plotFittedGPDvsEmpiricalExcesses(danish,threshold =u)
+
+abline(h =0.01)
+```
+
+Let's use the `shorRM` function in the `QRM` package to calculate the expected short-fall confidence intervals. THe initial `alpha.tolerance` is `1 - h` risk tolerance. We are only looking at the expected shortfall and could also have specified value at risk. What we really want to see is the range of `ES` as we wander into the deep end of the pool with high exceedances. 
+
+```{r}
+alpha.tolerance <- 0.05
+showRM(fit.danish, alpha = 1 - alpha.tolerance, RM = "ES", method = "BFGS")
+```
+
+`CI` stands for "confidence interval" and we answer this question:
+
+For each level of tolerance for loss (vertical axis) what is the practical lower and upper limits of the expected shortfall of 23.95 million?
+
+Pratically speaking how much risk would managers be willing to retain (lower bound) and how much would you underwrite (upper - lower bounds)?
+
+
+### THe shape of things to come
+
+Let's now plot the GPD shape parameter as a function of the changing threshold.
+
+```{r}
+## Effect of changing threshold on xi
+xiplot(danish)
+```
+
+What does `xi` tell us? Mainly information about the relationship between our risk measures. The ratio of `VaR` to `ES` is $(1 - \xi )^{-1}$ if $0 \le \xi \ge 1$. How bent the tail will be: higher $\xi$ means a heavier tail, and a higher frequency of very large losses.
+
+Again the upper and lower bounds help us diagnose what is happening to our exceedances. The Middle line is the shape parameter at various thresholds and their correponding exceedances. Dashed red lines are the "river banks" bounding the upper and lower edges of the tail (by threshold) distribution of the estimated risk measure. Fairly stable?
+
+
+### Example
+
+We can run this code to throw the two popular risk measures together
+
+```{r}
+## Fit GPD model above 20
+mod2 <- fit.GPD(danish, threshold = 20)
+mod2$par.ests
+
+```
+
+```{r}
+mod2$par.ses
+```
+
+```{r}
+plotFittedGPDvsEmpiricalExcesses(danish, threshold = 20)
+```
+
+Let's interpret across various threhold regions:
+
+1. From 20 to about 40, fairly dense and linear
+
+2. From about 40 to 60, less dense and a more bent slope ($\xi$ is bigger than for lower threshold)
+
+3. Big and less frequent outliers from about 50 to well over 200
+
+Some managerial implications to spike the discussion could include:
+
+1. Budget for loss in region 1
+2. Buy insurance for region 2
+3. Consider some loss reserves for region 3
+
+```{r}
+mod2 <- fit.GPD(danish, threshold = 20)
+mod2$par.ests
+```
+
+```{r}
+mod2$par.ses
+```
+
+
+
+```{r}
+(t.value <- mod2$par.ests/mod2$par.ses)
+```
+
+The ratio of the parameter estimates to the standard errors of those estimates gives up an idea of the rejection of the hypothesis that the parameters are no different than zero. In `R` we can do this:
+```{r}
+(p.value = dt(t.value, df = length(danish) - 2))
+```
+
+Here `df` is the degree of freedom for 2 estiamted parameters. The values are very low, meaning there is a very small chance that the estimates are zero. Various risk measures and tail plots can elucidate more interpreation. Here we can use two confidence levels.
+
+```{r}
+(RMs2 <- RiskMeasures(mod2, c(0.99, 0.995)))
+```
+
+
+```{r}
+RMs2
+```
+
+```{r}
+plotTail(mod2)
+showRM(mod2, alpha = 0.99, RM = "VaR", method = "BFGS")
+```
+
+```{r}
+showRM(mod2, alpha = 0.99, RM = "ES", method = "BFGS")
+```
+
+## Summary
+
+Operational risk is "extreme" finance with (of course) extreme value distributions, methods from reliability and vulnerability analysis thrown in for a good measure, and numerious regulatory capital regulations. We just built both simulation and estiamtion models that produced data driven risk thresholds and an operational nature. That nature means:
+
+* Heavy tail loss severity distributions,
+
+* Often with frequencies that may vary considerably over time, and
+
+* Random losses over time
+
+Application of robust risk measures is an ongoing excercise especially as we learn more about loss and its impact on operations and strategy.
+
+
+# Measuring Volatility
+
+## Introduction
+
+* Your company owns several facilities for the manufacture and distribution of polysyllabic acid, a compound used in several industries (and of course quite fictional!).
+
+* Inputs to the manufacturing and distribution processes include various petroleum products and natural gas. Price swings can be quite volatile, and you know that Brent crude exhibits volatility clustering.
+
+* Working capital management is always a challenge, and recent movements in the dollar against the euro and pound sterling have impacted cash conversion severly.
+
+8 Your CFO wants to hedge the input price risk using futures and over-the-counter (OTC) instruments.
+
+The board is concerned because the company has missed its earnings estimate for the fifth straight quarter in the row. Shareholders are not pleased. The culprits seem to be a volatile cost of goods sold coupled with large swings in some revenue segments in the United Kingdom (UK) and the European Union (EU). Your CFO has handed you the job of organizing the company's efforts to understand the limits your exposure can extend. The analysis will be used to develop policy guidelines for managing customers and vendor relationships.
+
+
+### Example
+
+1. What are the key business questions you should ask about energy pricing patterns?
+
+2. What systematic approach might you use to manage input volatility?
+
+Here are some ideas.
+
+1. Key business questions might be
+
+    * Which input prices and exchange rates are more volatile than others and when?
+    
+    * Are price movements correlated?
+    
+    * In times of market stress how volatile can they be?
+    
+    * Are there hedging instruments we can deploy or third parties we can use to mitigate pricing risk?
+    
+2. Managing volatility
+
+    * Set up a monitoring ssystem
+
+
+
+## What is ALL the Fuss About?
+
+We have already looked at volatility clustering. ARCH models are one way to model this phenomenon
+
+*ARCH* stands for
+
+    * Autoregressive (lags in volatility)
+    * Conditional (any new values depend on others)
+    * Heteroscedasticity (Greek for varying volatility, here time-varying)
+    
+These models are especially useful for financial time series that exhibit periods of large return movements alongside intermittent periods of relative calm price changes.
+
+An experiment is definately in order.
+
+THe `AR+ARCH` model can be specified starting with $z(t)$ standard normal variables and initial (we will overwrite this in the simulation) volatility series $\sigma(t)^2 = z(t)^2$. We then condition these variates with the $\epsilon(t) = (sigma^2)^{1/2}z(t)$. Then we first compute for each date $t = 1\dots n$,
+
+$$\epsilon(t) = (sigma^2)^{1/2}z(t)$$
+
+Then, using this conditional error term we compute the autoregression (with lag 1 and centered at the mean $\mu$) 
+
+$$y(t) = \mu + \phi(y(t - 1) - \mu) + \epsilon(t)$$
+
+Now we are ready to compute the new variance term.
+
+
+```{r}
+n <-10500## lots of trials
+z <-rnorm(n) ## sample standard normal distribution variates
+e <-z ## store variates
+y <-z ## store again in a different place
+sig2 <-z^2## create volatility series
+omega <-1## base variance
+alpha <-0.55## Markov dependence on previous variance
+phi <-0.8## mMarkov dependence on previous period
+mu <-0.1## average return
+omega/(1-alpha) ;sqrt(omega/(1-alpha))
+```
+
+
+```{r}
+set.seed("1012")
+for (t in 2:n) ## Because of lag start at second date
+{
+  e[t] <- sqrt(sig2[t])*z[t] # 1. e is conditional on sig
+  y[t] <- mu + phi*(y[t-1]-mu) + e[t] ## 2. generate returns
+  sig2[t+1] <- omega + alpha * e[t]^2 ## 3. generate new sigma^2 to feed 1
+}
+```
+
+
+A plot is a little than instructure
+
+```{r}
+par(mfrow =c(2,4))
+plot(z[10001:n],type ="l",xlab ="t",ylab = expression(epsilon),main ="1. Simple noise")
+
+plot(sqrt(sig2[10000:n]),type ="l",xlab ="t",ylab =expression(sigma[t]),main ="2. Conditional sigma")
+
+plot(e[10001:n],type ="l",xlab ="t",ylab ="a",main ="3. ARCH")
+
+plot(y[10001:n],type ="l",xlab ="t",ylab ="y",main ="4. AR+ARCH")
+
+acf(e[10001:n],main ="5. ARCH")
+
+acf(abs(e[10001:n]),main ="6. Absolute ARCH value")
+
+acf(y[10001:n],main ="7. AR+ARCH")
+
+acf(abs(y[10001:n]),main ="8. Absolute AR+ARCH value")
+```
+
+What do we see?
+
+1. Large outlying peaks in the conditional standard deviation
+
+2. Showing up as well in the ARCh plot
+
+3. AR adds the clustering as returns attempt to revert to the long run mean of $\mu = 10$ percent.
+
+4. Patterns reminiscent of clustering occur with thick and numerous lags in the `acf` plots. There is persistence of large movement both up and down.
+
+
+Why does it matter?
+
+* Revenue recieved from customer contracts priced with volatility clustering will act like the prices: when in a downward spiral, that spiral amplify more than when prices try to trend upward.
+
+* The same will happen with the value of inventory and the costs of inputs.
+
+* All of this adds up to volatile EBITDA (Earning Before Interest and Tax adding in non-cash Depreciation and Amortization), missed earnings targets, shareholders selling, the stock price dropping and equity-based compensation falling.
+
+
+We have more than one way to estimate the parameters of the AR-ARCH process. Essentially we are running yet another "regression". Let's first load some data to tackle the CFO's question around exposures in the UK, EU, and in the oil market.
+
+
+
+```{r}
+library(rugarch)
+library(qrmdata)
+library(xts)
+# Currency Data
+data("EUR_USD")
+data("GBP_USD")
+# Brent Oil data (FRED)
+data("OIL_Brent")
+
+data.1 <- na.omit(merge(EUR_USD, GBP_USD, OIL_Brent))
+
+P <- data.1
+R <- na.omit(diff(log(P)) * 100)
+names.R <- c("EUR.USD", "GBP.USD", "OIL.Brent")
+colnames(R) <- names.R
+Brent.p <- data.1[, 3]
+Brent.r <- R[, 3] ## Pull out just the Brent Prices
+```
+
+Then we plot the data, transformations, and autocorrelations.
+
+```{r}
+plot(Brent.r)
+```
+
+
+```{r}
+acf(Brent.r)
+```
+
+
+```{r}
+Box.test(Brent.r, type = c("Ljung-Box"))
+```
+
+The p-value is small enough to more than reject the null hypothesis that the 14-day lag is not significantly different from zero
+
+
+## It is Fitting...
+
+
+Our first mechanical task is to specify the ARMA-GARCH model. First we specify.
+
+1. Use the `ugarchspec` function to specify a plain vanilla `sGarch` model.
+
+2. `garchOrder = c(1, 1)` means we are using the first lags of residuals squared and variance or (with $\omega$, "omega", the average variance, $\sigma^2_t$), here with brent returns.
+
+$$
+\sigma _ { t } ^ { 2 } = \omega + \alpha _ { 1 } \varepsilon _ { t - 1 } ^ { 2 } + \beta _ { t - 1 } \sigma _ { t - 1 } ^ { 2 }
+$$
+
+3. Use `armaORDER = c(1, 0)` to specify the mean Brent return model with long run average $\mu$
+
+$$
+r _ { t } = \mu + \psi _ { 1 } y _ { t - 1 } + \psi _ { 2 } \varepsilon _ { t - 1 }
+$$
+
+4. Include `means` as in the equations above.
+
+5. Specify the distribution as `norm` for normally distributed innovations $\epsilon_t$. WE will also compare this fit with the `std` Student's t-distribution innovations using the Akaike Information Criterion (AIC).
+
+6. Fit the data to the model using `ugarchfit`
+
+
+```{r}
+AR.GARCH.Brent.Norm.spec <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)), mean.model = list(arimaOrder = c(1,0), include.mean = TRUE), distribution.model = "norm")
+
+fit.Brent.norm <- ugarchfit(spec = AR.GARCH.Brent.Norm.spec, data = Brent.r)
+```
+
+Let's look at the conditional quantiles from this model, otherwise known as the VaR limits, nominally set at 99 percent.
+
+```{r}
+## First the series with conditional
+## quantiles
+
+plot(fit.Brent.norm, which = 2)
+```
+
+
+Now let's generate a panel of plots.
+
+```{r}
+par(mfrow = c(2, 2))
+## acf of absolute data - shows serial 
+## correlation
+
+plot(fit.Brent.norm, which = 6)
+## QQPlot of data - shows
+## leptokurtosis of standardized
+## residuals - normal assumptions not 
+## supported
+
+plot(fit.Brent.norm, which = 9)
+## acf of standardized residuals - 
+## shows AR dynamics do a reasonable
+## job of explaining conditional mean
+
+plot(fit.Brent.norm, which = 10)
+
+## acf of squared standardized
+## residuals - shows GARCH dynamics do
+## a reasonable job of explaining
+## conditional sd
+
+plot(fit.Brent.norm, which = 11)
+```
+
+
+### Example
+
+Let's redo the GARCH estimation now using the possibly more realistic thicker tails of the Student t-distribution for the $\epsilon$ innovations. Here we just replace `norm` with `std` in the `distribution.model =` statement in the `ugarchspec` function.
+
+```{r}
+## Fit an AR(1)-GARCH(1,1) model with
+## student innovations
+
+AR.GARCH.Brent.T.spec <- ugarchspec(variance.model =list(model ="sGARCH",garchOrder =c(1,1)), mean.model =list(armaOrder =c(1,0), include.mean =TRUE), distribution.model ="std")
+
+fit.Brent.t <- ugarchfit(spec = AR.GARCH.Brent.T.spec, data =Brent.r)
+
+par(mfrow =c(2,2))
+plot(fit.Brent.t,which = 6)
+plot(fit.Brent.t,which =9)
+plot(fit.Brent.t,which =10)
+plot(fit.Brent.t,which =11)
+par(mfrow =c(1,1))
+```
+
+Here are some results
+
+1.ACF of absolute observations indicates much volatility clustering.
+
+2.These are significantly dampened by the AR-ARCH estimation with almost boundedstandardized residuals (residual / standard error).
+
+3.More evidence of this comes from the ACF of the squared standardized residuals.
+
+4.It appears that this AR-GARCH specification and Student’s t-distributed innovations captures most of the movement in volatility for Brent.
+
+
+Which model? - Use the Akaike Information Criterion (AIC) to measure information leakage from a model. - AIC measures the mount of information used in a model specified by alog likelihood function. - Likelihood: probability that you will observe the Brent returns given the parameters estimated by (in this case) the GARCH(1,1) model with normal or t-distributed innovations. - Smallest information leakage (smallest AIC) is the model for us.
+
+Compute 5. Using normally distributed innovations produces a model with AIC = 4.2471.6.  Using Student’s t-distributed innovations produces a model with AIC = 4.2062. 7.GARCH(1,1) with Student’s t-distributed innovations is more likely to have less information leakage than the GARCH(1,1) with normally distributed innovations.
+
+Here are some common results we can pull from the fit model:
+
+```{r}
+coef(fit.Brent.t)
+```
+
+Coefficients include:
+
+
+
+* `mu` is the long run average Brent return.
+
+* `ar1` is the impact of one day lagged return on today’s return.
+
+* `omega` is the long run variance of Brent return.
+
+* `alpha1` is the impact of lagged squared variance on today’s return.
+
+* `beta1` is the impact of lagged squared residuals on today’s Brent return.
+
+* `shape` is the degrees of freedom of the Student’s t-distribution and the bigger this is, the thicker the tail.
+
+
+Let's plot the star of this show: time-varying volatility.
+
+```{r}
+coef(fit.Brent.t)
+```
+
+
+```{r}
+plot(sigma(fit.Brent.t))
+```
+
+
+Here's the other reason for going through this excerise: we can look at any Brent volatility range we like.
+
+```{r}
+plot(quantile(fit.Brent.t, 0.99))
+```
+
+```{r}
+z.hat <- residuals(fit.Brent.t, standardize = TRUE)
+plot(z.hat)
+```
+
+```{r}
+hist(z.hat)
+```
+
+```{r}
+mean(z.hat)
+```
+
+```{r}
+var(z.hat)
+```
+
+```{r}
+library(moments)
+skewness(z.hat)
+```
+
+```{r}
+kurtosis(z.hat)
+```
+
+```{r}
+shapiro.test(as.numeric(z.hat))
+```
+
+```{r}
+jarque.test(as.numeric(z.hat))
+```
+
+What do we see?
+
+* Left skewed.
+* Thick tailed
+* Potentially large losses can occur with ever larger losses in the offing
+* More negative than positive
+* Both standard tests indicate rejection of the null hypothesis that the series is normally distributed.
+
+## Simulate... again until Morale Improves...
+
+
+1. Specify the `AR-GARCH` process using the parameters from the fit.Brent.t results
+
+2. Generate 2000 paths
+
+```{r}
+require(rugarch)
+
+GARCHspec <- ugarchspec(variance.model =list(model = "sGARCH",
+                                              garchOrder = c(1, 1)), 
+                       mean.model = list(armaOrder = c(1, 0), include.mean = TRUE),
+                       distribution.model = "std",
+                       fixed.pars = list(mu = 0.04, ar1 = 0.0173,
+                                         omega = 0.0109, alpha1 = 0.0382,
+                                         beta1 = 0.9607, shape = 7.0377))
+
+GARCHspec
+```
+
+```{r}
+## Generate two realizations of length
+## 2000
+
+path <- ugarchpath(GARCHspec, nsim = 2000, n.start = 50, m.sim =  2)
+```
+
+There is a special plotting function for "uGARCHpath" objects.
+
+```{r}
+plot(path, which = 1)
+plot(path, which = 2)
+plot(path, which = 3)
+plot(path, which = 4)
+```
+
+
+
+There is also an extraction function for the volatility.
+
+```{r}
+vol <- sigma(path)
+head(vol)
+```
+
+```{r}
+plot(vol[,1], type = "h")
+```
+
+```{r}
+plot(vol[, 2], type = "h")
+```
+
+
+Here is a little more background on the classes used
+
+```{r}
+series <- path@path
+## series is a simple list
+class(series)
+```
+
+```{r}
+names(series)
+```
+
+```{r}
+## the actual simulated data are in
+## the matrix/vector called
+## 'seriesSim'
+
+X <- series$seriesSim
+head(X)
+
+```
+
+
+### Example
+
+Does the simulated series conform to stylized facts?
+
+```{r}
+X1 <- X[, 1]
+acf(X1)
+acf(abs(X1))
+qqnorm(X1)
+qqline(X1, col = 2)
+shapiro.test(X1)
+
+```
+
+
+## Multivariate GARCH models
+
+We go from univariate GARCH to multivariate GARCH... and use the mose recent technqiues to make it into the fray:
+
+* The Dynamic Conditional Correlation of Nobel Laureate Robet Eagle.
+
+* In the GARCH model we just did, individual assets following their own univaraite GARCH process: they now have time-varying volatilities.
+
+* Eagle figured out how to make the correlation among asset return also time-varying.
+
+
+Why? - What if we have a portfolio, like the accounts recivable that might face variations in exchange rate and in Brent oil. - We would need to know the joint volatilities and dependencies of these three factors as they contribute to overall accounts recievable volatility - We would use these conditional variances at least to model option prices on instruments to manage currency and commodity risk.
+
+
+```{r}
+library("rmgarch")
+garch11.spec <- ugarchspec(mean.model = list(armaOrder = c(0,0)), 
+                           variance.model = list(garchOrder = c(1, 1), 
+                           model = "sGARCH"),
+                           distribution.model = "std")
+
+dcc.garch11.spec  = dccspec(uspec = multispec(replicate(3, garch11.spec)), dccOrder = c(1, 1),
+                            distribution = "mvt")
+```
+
+
+Look at `dcc.garch11.spec`
+
+```{r}
+dcc.garch11.spec
+```
+
+
+
+Now for the fit (takes more than 27.39 seconds on my laptop...)
+
+```{r}
+dcc.fit <- dccfit(dcc.garch11.spec, data = R)
+```
+
+```{r}
+dcc.fit
+```
+
+
+* The mean models of each series (EUR.USD, GPB.USD, OIL.Brent) are overwhelmed by the preponderance of time-varying volatility, correlation, correlation, and shape (degrees of freedom since we used the Student's t-distribution).
+
+* The joint conditional covariance (relative of correlation) parameters are also significantly different from zero.
+
+Using all of the information from the fit, we now forecast. These are the numbers we would use to simulate hedging instruments or portfolio VaR or ES. Let's plot the time-varying sigma first.
+
+```{r}
+dcc.fcst <- dccforecast(dcc.fit, n.ahead = 100)
+plot(dcc.fcst, which = 1)
+plot(dcc.fcst, which = 2)
+plot(dcc.fcst, which = 3)
+plot(dcc.fcst, which = 5)
+```
+
+
+```{r}
+dcc.residuals <- residuals(dcc.fit)
+(Brent.dcc.var <- quantile(dcc.residuals$OIL.Brent, c(0.01, 0.05, 0.5, 0.95, 0.99)))
+```
+
+```{r}
+(GBP.dcc.var <- quantile(dcc.residuals$GBP.USD, c(0.01, 0.05, 0.5, 0.95, 0.99)))
+```
+
+
+```{r}
+(EUR.dcc.var <- quantile(dcc.residuals$EUR.USD, c(0.01, 0.05, 0.5, 0.95, 0.99)))
+```
+
+
+```{r}
+plot(dcc.residuals$OIL.Brent)
+```
+
+What do we see?
+
+1. A bit more heavily weighted in the negative part of the distributions.
+
+2. Exchange rates are about the same as one another in this profile.
+
+3. Brent is shocky at best: large moves either way.
+
+4. If you use Brent contingent inputs (cost) in your production process you are naturally short Brent and would experience losses at the rate of 500% about 1% of the time. (99% CI)
+
+
+## Finishing
+
+Back to Brent. Let's refit using the new volatility models and innovation distribution to capture asymmetry and thick tails.
+
+```{r}
+Brent.spec <- ugarchspec(variance.model = list(model = "gjrGARCH",
+                                               garchOrder = c(1, 1)),
+                                               mean.model = list(arimaOrder = c(1, 1),
+                                                include.mean = TRUE),
+                                               distribution.model = "nig")
+```
+
+Here we experiment with a new distribution: the negative inverse gamma. Thick tails abound...
+
+```{r}
+fit.Brent <- ugarchfit(spec = Brent.spec, 
+                       data = R$OIL.Brent,
+                       solver.control = list(trace = 0))
+```
+
+Another 10 seconds (or so) of our lives will fit this models.
+
+```{r}
+fit.Brent
+```
+
+
+## Example
+
+Let's run this code and recall what the `evir` package does for us.
+
+```{r}
+library("evir")
+Brent.resid <- abs(residuals(fit.Brent))
+gpdfit.Brent <- gpd(Brent.resid, threshold = quantile(Brent.r, 0.9))
+(Brent.risk <- riskmeasures(gpdfit.Brent, c(0.9, 0.95, 0.975, 0.99, 0.999)))
+```
+
+What does this mean? 
+
+1. $1- p$ gives us levels of tolerance.
+
+2. `quantile` gives us the value at risk (VaR)
+
+3. `sfall` reports the expected short fall (ES)
+
+
+From the `evir` package here is the tail lot
+
+```{r}
+tailplot(gpdfit.Brent)
+```
+
+
+What does this mean?
+
+* The results show much thick and volatile tail activity event with the `AR-GARCH` treatment.
+
+* We could well go back to market and operational risk section to understand mean excess value (beyond thresholds) and the confidence interval for VaR and ES.
+
+* For accounts recivable mitigation strategies might be to excess risk hedge provided through reinsurance and total return swaps.
+
+* Credit risk analysis of customers is critical: frequent updates of Brent exposed customers will help to detect early on problems that might admit of some solutions.
+
+
+
+
+# Aggregating Enterprise Risk
+
+## Introduction: The Problem with Enterprise Risk
+
+Corporate policy dictates that mangement must assess risks to equity annually and whether a circumstance dictates. SUch a circumstance is an IPO.
+
+Mangement knows of at least three material risks:
+
+* Customers defect so there is uncertinty in revenue growth.
+
+* Suppliers stop competing on price, quantity, and quality so there is uncertainty in variable expense.
+
+* There are major compliance breaches which impact fixed expense.
+
+No one knows much about these risks from history because this company is the first in its market to product a very innovative product. One question management knows *someone* will ask is how likely is it that the net operating margin will fall below, say, indicated earnings of $400 million. (Venture risk)
+
+## Copula
+
+Our problem is:
+
+1. We have three major risk factors and each has their own distribution.
+
+2. We also know wthat they are somehow correlated.
+
+3. How can we aggregate the three into one risk measure that is tangible, and preserves the correlation?
+
+### From scratch
+
+Out first task is to generate multivariate normal variates that are correlated with one another. Here we relate three standard normal random variables together. A standard normal random variable has a mean , $\mu = 0$, and variance, $\sigma^2 = 1$. The variable `sigma` in the code below is the *correlation* matrix.
+
+```{r}
+library("mvtnorm")
+set.seed(1016)
+
+n.risks <- 3 ## Number of risk factors
+m <- n.risks
+
+n.sim <- 1000
+
+sigma <- matrix(c(1, 0.4, 0.2, 0.4, 1, -0.8, 0.2, -0.8, 1), nrow = 3)
+
+z <- rmvnorm(n.sim, mean = rep(0, nrow(sigma)), sigma = sigma, method = "svd")
+
+
+
+```
+
+```{r}
+library(psych)
+cor(z, method = "spearman")
+```
+
+```{r}
+cor(z, method = "pearson")
+```
+
+```{r}
+pairs.panels(z)
+```
+
+
+## Sklar's in the house...
+
+Next we use a result from mathematical probability called
+
+**Sklar's Theorem (1959)**
+
+* If $x$ is a random variable with distribution $F$,
+
+* the $F(x)$ is uniformly distributed in the interval [0,1].
+
+Let's translate this idea into `R` and look at the resulting interactions.
+
+```{r}
+require(psych)
+u <- pnorm(z)
+pairs.panels(u)
+```
+
+We see that the Gaussian (normal) distribution has been reshaped into a uniform distribution just as Sklar predicted. THe idea around this theorem is the same as around the number 1. We can multiply and real number by one and get the real number back. This is the identical operation. (Too funny, must apoligize to mathematicians and statisitcians). In somewhat analogous way, the uniform distribution serves a role as an distribution indentity operator. When we operate on the unformly distributed random numbers with a distribution, we get back that distribution. But in this case the identity distribution has structure in it (correlations) that the new distribution inherits. 
+
+Now, we only need to select the marginal probabilities of the risks we are assessing and apply them to the dependently related `u` variates. Suppose the marginal probability distributions for revenue growth is `gamma`, variable expense ratio is `beta`, and the fixed expense ratio is Student's t distribution with paramters:
+
+```{r}
+x1 <- qgamma(u[, 1], shape = 2, scale =1)
+x2 <- qbeta(u[, 2], 2, 2)
+x3 <- qt(u[, 3], df = 5)
+```
+
+Nice outliers! Starting from a multivariate normal distribution we create dependent uniform variates. Using the dependent uniform variates we created dependent distributions of our choosing
+
+
+```{r}
+factors.df <- cbind(x1/10, x2, x3/10)
+
+colnames(factors.df) <- c("Revenue", "Variable Cost", "Fixed Cost")
+
+pairs.panels(factors.df)
+```
+
+
+```{r}
+cor(factors.df, method = "spearman")
+```
+
+
+## Analyze the results
+
+Now to use all of this simulation to project revenue, expense, and margin.
+
+```{r}
+revenue <- 1000 * (1 + factors.df[, 1])
+variable.cost <- revenue * factors.df[, 2]
+
+fixed.cost <- revenue * factors.df[, 3]
+
+total.cost <- variable.cost + fixed.cost
+
+operating.margin <- revenue - variable.cost - fixed.cost
+
+analysis <- cbind(revenue, total.cost, operating.margin)
+
+colnames(analysis) <- c("Revenue", "Cost", "Margin")
+```
+
+### Example
+
+Run `pairs.panels` using the `analysis` data frame. What do you see?
+
+
+Here's the result.
+
+```{r}
+pairs.panels(analysis)
+```
+
+
+
+What do we see?
+
+1. Variable and fixed cost aggregate into a distribution that is right-skewed.
+
+2. Margin has a high density across a broad range of potential outcomes.
+
+3. An increase (decrease) in cost will probably result in an increase (decrease) in revenue.
+
+4. Revenue and margin also seem to be counter cyclical, a non-intuitive result, but one that makes sense only by looking at the negative correlation between cost and margin.
+
+
+## Risk Measures
+
+We are not yet done. The whole point of this analysis is to get consistent and coherent measures of risk to a consumer of the analysis, namely, the decision maker who is the CFO in this case. We define the value at risk , $VaR$, as the $\alpha$ quantile of the performance metric of interest. Higher $\alpha$ means lower risk tolerance. Here is the relationship:
+
+$$
+Q ( x , \alpha ) = F ( x ; \operatorname { Prob } [ X ] > \alpha )
+$$
+
+
+The metric $x$ in this case is margin. Expected Shortfall, $ES$, is then the mean of the margin beyond $VaR$. The parameter $\alpha$ is the level of organizational risk tolerance. If $\alpha = 0.99$, then the organization would want risk capital to cover the potential loss $VaR$, and more conservatively, $ES$. The organization is even more conservative the higher the $\alpha$.
+
+We purloin the R code from the market risk material here:
+
+```{r}
+## Simple Value at RIsk
+expected.margin <- 400
+## Center marin loss on expected
+## margin
+loss.rf <- -(expected.margin - operating.margin)
+## Assign metric of interest to
+## reusable code
+summary(loss.rf)
+```
+
+
+```{r}
+## Always review a key variable's
+## content
+alpha.tolerance <- 0.99
+
+## Very intolerant! Remeber that
+## putting a variable assignment in
+## parentheses also prints the result
+
+(VaR.hat <- quantile(loss.rf, probs = alpha.tolerance, names = FALSE))
+```
+
+```{r}
+### Just a simple Expected shoftfall
+(ES.hat <- mean(loss.rf[loss.rf > VaR.hat]))
+```
+
+
+Let's plot the results
+
+```{r}
+hist(loss.rf, xlab = "Operating Margin",
+     ylab = "Frequency", main = "Margin Loss Tolerance")
+
+abline(v = VaR.hat, col = "red")
+```
+
+
+Sklar provides us with a way to join together any set of distributions. It transforms correlated variates into uniform distribtion. The uniform distribution takes on the role of the number 1 in algebra. Anything multiplied by 1 returns itself. In a very loose way, the uniform distribution is the identity distribution, just like one is the identity term in algebra. So that whenever we operate on the uniform distribution we get back the same distribution - but this time with correlation.
+
+The rub is the starting point. Here we used the Gaussian (normal) distribution. This is not a very thick tailed distribution, and it can be shown that extreme events are not dependent on one another using this distribution. This is NOT a useful feature ultimately. SO analyst use thickly tailed distributions such as the Student-t and the generalized Pareto distribution (GPD) to get dependency far out into the tails. This is nearly perfect for risk managers and decision markers.
+
+### Example
+
+Let's use this R code to modify the copula making machine we just built. Instead of `rmvnorm` we will use `rmvt` to generate the correlated risk factors. The is called a **t-copula**.
+
+
+```{r}
+library(mvtnorm)
+library(psych)
+
+set.seed(1016)
+
+n.risk <- 3
+m <- n.risk
+n.sim <- 1000
+sigma <- matrix(c(1, 0.4, 0.2, 0.4, 1, -0.8, 0.2, -0.8, 1 ), nrow = m)
+z <- rmvt(n.sim, delta = rep(0, nrow(sigma)),
+          sigma = sigma, df = 6, type = "shifted")
+```
+
+Here are the results of our experiment. Let's go through the paces. First we look at the `z` variates we simulated using the multivariate Student's t-distribution.
+
+```{r}
+pairs.panels(z)
+```
+
+We then run the uniform distribution generator (with correlation structure).
+
+```{r}
+require(psych)
+u <- pnorm(z)
+pairs.panels(u)
+```
+
+
+Now, we only need to select the marginal probabilities of the risks we are assessing and apply them to the dependently related 'u' variates. Again suppose the marginal probability for revenue growth is `gamma`, for these variables expense ratio is `beta`, and fixed expense ratio is Student's t distribution with these parameters:
+
+```{r}
+x1 <- qgamma(u[, 1], shape = 2, scale = 1)
+x2 <- qbeta(u[, 2], 2, 2)
+x3 <- qt(u[, 3], df = 6)
+```
+
+Starting from a multivariate Student's t-distribution we created dependent uniform variates. Using the dependent uniform variates we created dependent distributions of our choosing.
+
+
+Next, we combine the series into a data frame and review the scatterplot matrix.
+
+```{r}
+factors.df <- cbind(x1/10, x2, x3/10)
+colnames(factors.df) <- c("Revenue", "Variable Cost", "Fixed Cost")
+
+pairs.panels(factors.df)
+```
+
+
+```{r}
+cor(factors.df, meth = "spearman")
+```
+
+
+
+
+
+
+
+
+# Finished
+
+## Congratulations
+
+
+
 
 
 
